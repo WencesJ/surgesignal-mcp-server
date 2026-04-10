@@ -1,5 +1,6 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -15,11 +16,6 @@ import { handleLookupSurge } from "./tools/lookup-surge.js";
 import { handleScanTopic } from "./tools/scan-topic.js";
 
 seedCompanies();
-
-const server = new Server(
-  { name: "surgesignal-mcp-server", version: "1.0.0" },
-  { capabilities: { tools: {} } }
-);
 
 const TOOLS = [
   {
@@ -160,28 +156,6 @@ const TOOLS = [
   },
 ];
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS,
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  try {
-    const data = await callTool(name, args as Record<string, unknown>);
-
-    return {
-      content: [{ type: "text", text: JSON.stringify(data) }],
-      structuredContent: data,
-    };
-  } catch (err) {
-    return {
-      content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-      isError: true,
-    };
-  }
-});
-
 async function callTool(name: string, args: Record<string, unknown>) {
   switch (name) {
     case "lookup_surge":
@@ -195,6 +169,37 @@ async function callTool(name: string, args: Record<string, unknown>) {
   }
 }
 
+function createServer() {
+  const s = new Server(
+    { name: "surgesignal-mcp-server", version: "1.0.0" },
+    { capabilities: { tools: {} } }
+  );
+
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: TOOLS,
+  }));
+
+  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+
+    try {
+      const data = await callTool(name, args as Record<string, unknown>);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(data) }],
+        structuredContent: data,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  });
+
+  return s;
+}
+
 const app = express();
 app.use(express.json());
 
@@ -204,23 +209,37 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", server: "surgesignal-mcp-server", version: "1.0.0" });
 });
 
-const transports = new Map<string, SSEServerTransport>();
+const sseTransports = new Map<string, SSEServerTransport>();
 
 app.get("/sse", async (_req, res) => {
+  const s = createServer();
   const t = new SSEServerTransport("/messages", res);
-  transports.set(t.sessionId, t);
-  res.on("close", () => transports.delete(t.sessionId));
-  await server.connect(t);
+  sseTransports.set(t.sessionId, t);
+  res.on("close", () => {
+    sseTransports.delete(t.sessionId);
+  });
+  await s.connect(t);
 });
 
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
-  const t = transports.get(sessionId);
+  const t = sseTransports.get(sessionId);
   if (t) {
     await t.handlePostMessage(req, res);
   } else {
     res.status(400).json({ error: "No active SSE connection for this session" });
   }
+});
+
+app.post("/sse", async (req, res) => {
+  const s = createServer();
+  const t = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  res.on("close", () => t.close());
+  await s.connect(t);
+  await t.handleRequest(req, res, req.body);
 });
 
 app.post("/mcp", async (req, res) => {

@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
-import { createContextMiddleware } from "@ctxprotocol/sdk";
+// import { createContextMiddleware } from "@ctxprotocol/sdk";
 import { seedCompanies } from "./services/company-resolver.js";
 import { runFullIngestion, startCronSchedule } from "./services/signal-store.js";
 import { handleLookupSurge } from "./tools/lookup-surge.js";
@@ -219,7 +219,7 @@ async function handleJsonRpc(method: string, params: Record<string, unknown> | u
 const app = express();
 app.use(express.json());
 
-app.use("/mcp", createContextMiddleware());
+// app.use("/mcp", createContextMiddleware());
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", server: "surgesignal-mcp-server", version: "1.0.0" });
@@ -281,11 +281,21 @@ app.post("/mcp", async (req, res) => {
   res.json(result);
 });
 
+function startKeepAlive() {
+  const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || "3000"}`;
+  setInterval(async () => {
+    try {
+      await fetch(`${url}/health`);
+    } catch {}
+  }, 10 * 60 * 1000);
+}
+
 const port = parseInt(process.env.PORT || "3000");
 app.listen(port, async () => {
   console.error(`SurgeSignal MCP server running on http://localhost:${port}`);
   console.error("Running initial data ingestion...");
   await runFullIngestion();
   startCronSchedule();
+  startKeepAlive();
   console.error("Ready to serve requests.");
 });

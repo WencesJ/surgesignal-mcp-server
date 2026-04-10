@@ -1,19 +1,18 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 import "dotenv/config";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 // import { createContextMiddleware } from "@ctxprotocol/sdk";
-import { COVERED_TOPICS } from "./constants.js";
 import { seedCompanies } from "./services/company-resolver.js";
 import { runFullIngestion, startCronSchedule } from "./services/signal-store.js";
-import { handleExplainSignals } from "./tools/explain-signals.js";
 import { handleLookupSurge } from "./tools/lookup-surge.js";
 import { handleScanTopic } from "./tools/scan-topic.js";
+import { handleExplainSignals } from "./tools/explain-signals.js";
+import { COVERED_TOPICS } from "./constants.js";
 
 seedCompanies();
 
@@ -169,35 +168,52 @@ async function callTool(name: string, args: Record<string, unknown>) {
   }
 }
 
-function createServer() {
-  const s = new Server(
-    { name: "surgesignal-mcp-server", version: "1.0.0" },
-    { capabilities: { tools: {} } }
-  );
+async function handleJsonRpc(method: string, params: Record<string, unknown> | undefined, id: unknown) {
+  if (method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "surgesignal-mcp-server", version: "1.0.0" },
+      },
+      id,
+    };
+  }
 
-  s.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS,
-  }));
+  if (method === "notifications/initialized") {
+    return { jsonrpc: "2.0", result: {}, id };
+  }
 
-  s.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+  if (method === "tools/list") {
+    return { jsonrpc: "2.0", result: { tools: TOOLS }, id };
+  }
 
+  if (method === "tools/call") {
     try {
-      const data = await callTool(name, args as Record<string, unknown>);
-
+      const p = params as { name: string; arguments?: Record<string, unknown> };
+      const data = await callTool(p.name, p.arguments || {});
       return {
-        content: [{ type: "text", text: JSON.stringify(data) }],
-        structuredContent: data,
+        jsonrpc: "2.0",
+        result: {
+          content: [{ type: "text", text: JSON.stringify(data) }],
+          structuredContent: data,
+        },
+        id,
       };
     } catch (err) {
       return {
-        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-        isError: true,
+        jsonrpc: "2.0",
+        result: {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        },
+        id,
       };
     }
-  });
+  }
 
-  return s;
+  return { jsonrpc: "2.0", error: { code: -32601, message: "Method not found" }, id };
 }
 
 const app = express();
@@ -212,12 +228,34 @@ app.get("/health", (_req, res) => {
 const sseTransports = new Map<string, SSEServerTransport>();
 
 app.get("/sse", async (_req, res) => {
-  const s = createServer();
+  const s = new Server(
+    { name: "surgesignal-mcp-server", version: "1.0.0" },
+    { capabilities: { tools: {} } }
+  );
+
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: TOOLS,
+  }));
+
+  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    try {
+      const data = await callTool(name, args as Record<string, unknown>);
+      return {
+        content: [{ type: "text", text: JSON.stringify(data) }],
+        structuredContent: data,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
+  });
+
   const t = new SSEServerTransport("/messages", res);
   sseTransports.set(t.sessionId, t);
-  res.on("close", () => {
-    sseTransports.delete(t.sessionId);
-  });
+  res.on("close", () => sseTransports.delete(t.sessionId));
   await s.connect(t);
 });
 
@@ -232,62 +270,15 @@ app.post("/messages", async (req, res) => {
 });
 
 app.post("/sse", async (req, res) => {
-  const s = createServer();
-  const t = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  res.on("close", () => t.close());
-  await s.connect(t);
-  await t.handleRequest(req, res, req.body);
+  const { method, params, id } = req.body;
+  const result = await handleJsonRpc(method, params, id);
+  res.json(result);
 });
 
 app.post("/mcp", async (req, res) => {
   const { method, params, id } = req.body;
-
-  if (method === "initialize") {
-    res.json({
-      jsonrpc: "2.0",
-      result: {
-        protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
-        serverInfo: { name: "surgesignal-mcp-server", version: "1.0.0" },
-      },
-      id,
-    });
-    return;
-  }
-
-  if (method === "tools/list") {
-    res.json({ jsonrpc: "2.0", result: { tools: TOOLS }, id });
-    return;
-  }
-
-  if (method === "tools/call") {
-    try {
-      const data = await callTool(params.name, params.arguments || {});
-      res.json({
-        jsonrpc: "2.0",
-        result: {
-          content: [{ type: "text", text: JSON.stringify(data) }],
-          structuredContent: data,
-        },
-        id,
-      });
-    } catch (err) {
-      res.json({
-        jsonrpc: "2.0",
-        result: {
-          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        },
-        id,
-      });
-    }
-    return;
-  }
-
-  res.status(400).json({ jsonrpc: "2.0", error: { code: -32601, message: "Method not found" }, id });
+  const result = await handleJsonRpc(method, params, id);
+  res.json(result);
 });
 
 const port = parseInt(process.env.PORT || "3000");

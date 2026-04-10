@@ -1,18 +1,18 @@
-import "dotenv/config";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import "dotenv/config";
 import express from "express";
 // import { createContextMiddleware } from "@ctxprotocol/sdk";
+import { COVERED_TOPICS } from "./constants.js";
 import { seedCompanies } from "./services/company-resolver.js";
 import { runFullIngestion, startCronSchedule } from "./services/signal-store.js";
+import { handleExplainSignals } from "./tools/explain-signals.js";
 import { handleLookupSurge } from "./tools/lookup-surge.js";
 import { handleScanTopic } from "./tools/scan-topic.js";
-import { handleExplainSignals } from "./tools/explain-signals.js";
-import { COVERED_TOPICS } from "./constants.js";
 
 seedCompanies();
 
@@ -207,22 +207,17 @@ app.get("/health", (_req, res) => {
 const transports = new Map<string, SSEServerTransport>();
 
 app.get("/sse", async (_req, res) => {
-  const transport = new SSEServerTransport("/messages", res);
-  transports.set(transport.sessionId, transport);
-
-  res.on("close", () => {
-    transports.delete(transport.sessionId);
-  });
-
-  await server.connect(transport);
+  const t = new SSEServerTransport("/messages", res);
+  transports.set(t.sessionId, t);
+  res.on("close", () => transports.delete(t.sessionId));
+  await server.connect(t);
 });
 
 app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
-  const transport = sessionId ? transports.get(sessionId) : undefined;
-
-  if (transport) {
-    await transport.handlePostMessage(req, res);
+  const t = transports.get(sessionId);
+  if (t) {
+    await t.handlePostMessage(req, res);
   } else {
     res.status(400).json({ error: "No active SSE connection for this session" });
   }
@@ -263,9 +258,9 @@ app.post("/mcp", async (req, res) => {
     } catch (err) {
       res.json({
         jsonrpc: "2.0",
-        error: {
-          code: -32000,
-          message: (err as Error).message,
+        result: {
+          content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+          isError: true,
         },
         id,
       });

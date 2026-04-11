@@ -57,23 +57,34 @@ async function getSignalsFromRedis(key: string): Promise<RawSignal[]> {
 async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal[]> {
   console.error(`[fan-out] Cache miss for ${domain}:${topic}, fetching live...`);
 
-  const results = await Promise.allSettled([
-    ingestRedditRSS(),
-    ingestGitHub(),
-    ingestNewsData(),
-    ingestAdzuna(),
-    ingestLinkedIn(),
-    ingestG2Free(),
-  ]);
+  const timeout = new Promise<RawSignal[]>((resolve) => {
+    setTimeout(() => {
+      console.error(`[fan-out] Timed out for ${domain}:${topic}`);
+      resolve([]);
+    }, 20000);
+  });
 
-  const allSignals: RawSignal[] = [];
-  for (const result of results) {
-    if (result.status === "fulfilled") {
-      allSignals.push(...result.value);
+  const fetchAll = async (): Promise<RawSignal[]> => {
+    const results = await Promise.allSettled([
+      ingestRedditRSS(),
+      ingestGitHub(),
+      ingestNewsData(),
+      ingestAdzuna(),
+      ingestLinkedIn(),
+      ingestG2Free(),
+    ]);
+
+    const allSignals: RawSignal[] = [];
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        allSignals.push(...result.value);
+      }
     }
-  }
 
-  return allSignals.filter((s) => s.domain === domain && s.topic === topic);
+    return allSignals.filter((s) => s.domain === domain && s.topic === topic);
+  };
+
+  return Promise.race([fetchAll(), timeout]);
 }
 
 export function getLastIngestTime(): number {

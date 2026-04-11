@@ -73,14 +73,6 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
     }
   }
 
-  // Store all fetched signals so they're available for future lookups
-  memorySignals = allSignals;
-  lastIngestAt = Date.now();
-
-  if (useRedis) {
-    await storeSignalsInRedis(allSignals);
-  }
-
   return allSignals.filter((s) => s.domain === domain && s.topic === topic);
 }
 
@@ -95,7 +87,7 @@ export async function getAllSignals(): Promise<RawSignal[]> {
   return memorySignals;
 }
 
-export async function getSignalsForDomainTopic(domain: string, topic: string): Promise<RawSignal[]> {
+export async function getSignalsForDomainTopic(domain: string, topic: string, allowFanOut: boolean = true): Promise<RawSignal[]> {
   if (useRedis) {
     const cached = await getSignalsFromRedis(signalKey(domain, topic));
     if (cached.length > 0) return cached;
@@ -104,7 +96,19 @@ export async function getSignalsForDomainTopic(domain: string, topic: string): P
     if (cached.length > 0) return cached;
   }
 
-  return await fanOutForDomain(domain, topic);
+  if (!allowFanOut) return [];
+
+  const fresh = await fanOutForDomain(domain, topic);
+  if (fresh.length > 0) {
+    memorySignals.push(...fresh);
+    lastIngestAt = Date.now();
+    if (useRedis) {
+      const redis = getRedis();
+      await redis.set(signalKey(domain, topic), JSON.stringify(fresh), "EX", CACHE_TTL_SIGNAL);
+    }
+  }
+
+  return fresh;
 }
 
 export async function getSignalsForTopic(topic: string): Promise<RawSignal[]> {

@@ -225,10 +225,8 @@ async function ingestTargetedCompanies(): Promise<RawSignal[]> {
 }
 
 export async function ingestRedditRSS(): Promise<RawSignal[]> {
-  const [subredditSignals, targetedSignals] = await Promise.all([
-    ingestSubreddits(),
-    ingestTargetedCompanies(),
-  ]);
+  const subredditSignals = await ingestSubreddits();
+  const targetedSignals = await ingestTargetedCompanies();
 
   return [...subredditSignals, ...targetedSignals];
 }

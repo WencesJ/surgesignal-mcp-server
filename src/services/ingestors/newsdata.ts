@@ -20,6 +20,19 @@ const KEYWORD_TOPIC_MAP: Record<string, CoveredTopic[]> = {
   "API management": ["api-management", "integration-platform"],
 };
 
+const COMPANY_NEWS_SEARCHES: Record<string, { domain: string; topics: CoveredTopic[] }> = {
+  "Salesforce CRM": { domain: "salesforce.com", topics: ["crm", "sales-engagement", "marketing-automation"] },
+  "HubSpot": { domain: "hubspot.com", topics: ["crm", "marketing-automation", "sales-engagement"] },
+  "Stripe payments": { domain: "stripe.com", topics: ["payment-processing", "ecommerce-platform", "billing"] },
+  "Datadog monitoring": { domain: "datadog.com", topics: ["monitoring", "cloud-infrastructure"] },
+  "Snowflake data": { domain: "snowflake.com", topics: ["data-warehouse", "data-integration", "business-intelligence"] },
+  "Zendesk support": { domain: "zendesk.com", topics: ["help-desk", "customer-success", "live-chat"] },
+  "Twilio": { domain: "twilio.com", topics: ["sms-platform", "voip", "api-management"] },
+  "MongoDB": { domain: "mongodb.com", topics: ["data-warehouse", "cloud-infrastructure"] },
+  "Grafana": { domain: "grafana.com", topics: ["monitoring", "business-intelligence"] },
+  "Intercom": { domain: "intercom.com", topics: ["live-chat", "customer-success", "help-desk"] },
+};
+
 const DOMAIN_PATTERN = /\b([a-z0-9-]+\.(com|io|co|ai|dev|app|so|org|net))\b/gi;
 
 const BLOCKED_DOMAINS = new Set([
@@ -110,12 +123,7 @@ async function fetchNews(keyword: string): Promise<NewsDataArticle[]> {
   return json.results || [];
 }
 
-export async function ingestNewsData(): Promise<RawSignal[]> {
-  if (!API_KEY) {
-    console.error("NEWSDATA_API_KEY not set, skipping news ingestion");
-    return [];
-  }
-
+async function ingestGenericNews(): Promise<RawSignal[]> {
   const signals: RawSignal[] = [];
   const keywords = Object.keys(KEYWORD_TOPIC_MAP);
 
@@ -162,4 +170,61 @@ export async function ingestNewsData(): Promise<RawSignal[]> {
   }
 
   return signals;
+}
+
+async function ingestTargetedCompanyNews(): Promise<RawSignal[]> {
+  const signals: RawSignal[] = [];
+  const companies = Object.keys(COMPANY_NEWS_SEARCHES);
+
+  for (const searchTerm of companies) {
+    const config = COMPANY_NEWS_SEARCHES[searchTerm];
+    if (!config) continue;
+
+    try {
+      const articles = await fetchNews(searchTerm);
+
+      for (const article of articles) {
+        const title = article.title || "";
+        const description = article.description || "";
+        const relevance = scoreRelevance(title, description);
+        const timestamp = article.pubDate
+          ? new Date(article.pubDate).toISOString()
+          : new Date().toISOString();
+
+        const company = getOrCreateCompany(config.domain);
+
+        for (const topic of config.topics) {
+          signals.push({
+            source: "news",
+            domain: company.canonical_domain,
+            topic,
+            score: relevance,
+            timestamp,
+            evidence_url: article.link,
+            evidence_snippet: title.slice(0, 500),
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`Failed targeted news for "${searchTerm}":`, (err as Error).message);
+    }
+
+    await delay(1500);
+  }
+
+  return signals;
+}
+
+export async function ingestNewsData(): Promise<RawSignal[]> {
+  if (!API_KEY) {
+    console.error("NEWSDATA_API_KEY not set, skipping news ingestion");
+    return [];
+  }
+
+  const [genericSignals, targetedSignals] = await Promise.all([
+    ingestGenericNews(),
+    ingestTargetedCompanyNews(),
+  ]);
+
+  return [...genericSignals, ...targetedSignals];
 }

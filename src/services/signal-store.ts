@@ -65,20 +65,20 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
   });
 
   const fetchAll = async (): Promise<RawSignal[]> => {
-    const results = await Promise.allSettled([
-      ingestRedditRSS(),
-      ingestGitHub(),
-      ingestNewsData(),
-      ingestAdzuna(),
-      ingestLinkedIn(),
-      ingestG2Free(),
-    ]);
-
     const allSignals: RawSignal[] = [];
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        allSignals.push(...result.value);
-      }
+
+    const sources = [
+      { name: "reddit", fn: ingestRedditRSS },
+      { name: "github", fn: ingestGitHub },
+      { name: "news", fn: ingestNewsData },
+      { name: "jobs", fn: ingestAdzuna },
+    ];
+
+    for (const source of sources) {
+      try {
+        const signals = await source.fn();
+        allSignals.push(...signals);
+      } catch {}
     }
 
     return allSignals.filter((s) => s.domain === domain && s.topic === topic);
@@ -139,6 +139,17 @@ export async function getUniqueDomainsByTopic(topic: string): Promise<string[]> 
   return Array.from(domains);
 }
 
+async function runSource(name: string, fn: () => Promise<RawSignal[]>): Promise<{ name: string; signals: RawSignal[] }> {
+  try {
+    const signals = await fn();
+    console.error(`  ${name}: ${signals.length} signals`);
+    return { name, signals };
+  } catch (err) {
+    console.error(`  ${name}: FAILED - ${(err as Error).message}`);
+    return { name, signals: [] };
+  }
+}
+
 export async function runFullIngestion(): Promise<{
   total: number;
   bySources: Record<string, number>;
@@ -152,32 +163,32 @@ export async function runFullIngestion(): Promise<{
     console.error("  Redis unavailable — using in-memory store");
   }
 
-  const results = await Promise.allSettled([
-    ingestRedditRSS(),
-    ingestGitHub(),
-    ingestNewsData(),
-    ingestAdzuna(),
-    ingestLinkedIn(),
-    ingestG2Free(),
-  ]);
-
-  const sourceNames: SignalSource[] = ["reddit", "github", "news", "jobs", "linkedin", "g2"];
-  const bySources: Record<string, number> = {};
   const allSignals: RawSignal[] = [];
+  const bySources: Record<string, number> = {};
 
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    const sourceName = sourceNames[i];
+  const reddit = await runSource("reddit", ingestRedditRSS);
+  allSignals.push(...reddit.signals);
+  bySources["reddit"] = reddit.signals.length;
 
-    if (result.status === "fulfilled") {
-      allSignals.push(...result.value);
-      bySources[sourceName] = result.value.length;
-      console.error(`  ${sourceName}: ${result.value.length} signals`);
-    } else {
-      bySources[sourceName] = 0;
-      console.error(`  ${sourceName}: FAILED - ${result.reason}`);
-    }
-  }
+  const github = await runSource("github", ingestGitHub);
+  allSignals.push(...github.signals);
+  bySources["github"] = github.signals.length;
+
+  const news = await runSource("news", ingestNewsData);
+  allSignals.push(...news.signals);
+  bySources["news"] = news.signals.length;
+
+  const jobs = await runSource("jobs", ingestAdzuna);
+  allSignals.push(...jobs.signals);
+  bySources["jobs"] = jobs.signals.length;
+
+  const linkedin = await runSource("linkedin", ingestLinkedIn);
+  allSignals.push(...linkedin.signals);
+  bySources["linkedin"] = linkedin.signals.length;
+
+  const g2 = await runSource("g2", ingestG2Free);
+  allSignals.push(...g2.signals);
+  bySources["g2"] = g2.signals.length;
 
   memorySignals = allSignals;
   lastIngestAt = Date.now();

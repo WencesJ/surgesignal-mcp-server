@@ -19,11 +19,11 @@ export type SignalSource = (typeof SIGNAL_SOURCES)[number];
 
 export const SOURCE_WEIGHTS: Record<SignalSource, number> = {
   reddit: 0.20,
-  linkedin: 0.00,
-  g2: 0.25,
+  linkedin: 0.15,
+  g2: 0.20,
   jobs: 0.20,
-  news: 0.15,
-  github: 0.20,
+  news: 0.10,
+  github: 0.15,
 };
 
 // Active weights (excluding disabled sources) must sum to 1.0.

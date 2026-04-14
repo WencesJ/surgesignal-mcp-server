@@ -91,8 +91,8 @@ async function fetchG2Category(category: string): Promise<Array<{
       "User-Agent": USER_AGENT,
       "Accept": "text/html",
     },
+    signal: AbortSignal.timeout(15000),
   });
-
   if (!res.ok) {
     throw new Error(`Status ${res.status}`);
   }

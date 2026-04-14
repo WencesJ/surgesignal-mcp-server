@@ -117,6 +117,7 @@ interface RedditPost {
 async function fetchRedditJSON(url: string): Promise<RedditPost[]> {
   const res = await fetch(url, {
     headers: { "User-Agent": USER_AGENT },
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {

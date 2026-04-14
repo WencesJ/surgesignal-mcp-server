@@ -95,7 +95,7 @@ async function fetchJobs(keyword: string): Promise<AdzunaJob[]> {
     sort_by: "date",
   });
 
-  const res = await fetch(`${BASE_URL}?${params}`);
+  const res = await fetch(`${BASE_URL}?${params}`, { signal: AbortSignal.timeout(15000) });
 
   if (!res.ok) {
     throw new Error(`Status ${res.status}`);

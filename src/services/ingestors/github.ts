@@ -89,7 +89,7 @@ async function fetchRecentIssues(repo: string): Promise<GitHubIssue[]> {
     headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
   }
 
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
 
   if (!res.ok) {
     throw new Error(`Status ${res.status}`);

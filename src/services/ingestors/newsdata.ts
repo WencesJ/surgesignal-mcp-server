@@ -113,7 +113,7 @@ async function fetchNews(keyword: string): Promise<NewsDataArticle[]> {
     size: "10",
   });
 
-  const res = await fetch(`${BASE_URL}?${params}`);
+  const res = await fetch(`${BASE_URL}?${params}`, { signal: AbortSignal.timeout(15000) });
 
   if (!res.ok) {
     throw new Error(`Status ${res.status}`);

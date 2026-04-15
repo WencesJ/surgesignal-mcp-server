@@ -54,37 +54,59 @@ async function getSignalsFromRedis(key: string): Promise<RawSignal[]> {
   return JSON.parse(raw) as RawSignal[];
 }
 
+async function runSequentialIngestors(): Promise<{ allSignals: RawSignal[]; bySources: Record<string, number> }> {
+  const ingestors: { name: string; fn: () => Promise<RawSignal[]> }[] = [
+    { name: "reddit", fn: ingestRedditRSS },
+    { name: "github", fn: ingestGitHub },
+    { name: "news", fn: ingestNewsData },
+    { name: "jobs", fn: ingestAdzuna },
+    { name: "linkedin", fn: ingestLinkedIn },
+    { name: "hackernews", fn: ingestHackerNews },
+  ];
+
+  const allSignals: RawSignal[] = [];
+  const bySources: Record<string, number> = {};
+
+  for (const { name, fn } of ingestors) {
+    const start = Date.now();
+    try {
+      const signals = await fn();
+      allSignals.push(...signals);
+      bySources[name] = signals.length;
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`  ${name}: ${signals.length} signals (${elapsed}s)`);
+    } catch (err) {
+      bySources[name] = 0;
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`  ${name}: FAILED (${elapsed}s) - ${(err as Error).message}`);
+    }
+  }
+
+  return { allSignals, bySources };
+}
+
 async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal[]> {
   console.error(`[fan-out] Cache miss for ${domain}:${topic}, fetching live...`);
 
-  const timeout = new Promise<RawSignal[]>((resolve) => {
-    setTimeout(() => {
-      console.error(`[fan-out] Timed out for ${domain}:${topic}`);
-      resolve([]);
-    }, 20000);
-  });
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Fan-out timeout after 20s")), 20000)
+  );
 
-  const fetchAll = async (): Promise<RawSignal[]> => {
-    const allSignals: RawSignal[] = [];
+  try {
+    const { allSignals } = await Promise.race([runSequentialIngestors(), timeout]);
 
-    const sources = [
-      { name: "reddit", fn: ingestRedditRSS },
-      { name: "github", fn: ingestGitHub },
-      { name: "news", fn: ingestNewsData },
-      { name: "jobs", fn: ingestAdzuna },
-    ];
+    memorySignals = allSignals;
+    lastIngestAt = Date.now();
 
-    for (const source of sources) {
-      try {
-        const signals = await source.fn();
-        allSignals.push(...signals);
-      } catch {}
+    if (useRedis) {
+      await storeSignalsInRedis(allSignals);
     }
 
     return allSignals.filter((s) => s.domain === domain && s.topic === topic);
-  };
-
-  return Promise.race([fetchAll(), timeout]);
+  } catch (err) {
+    console.error(`[fan-out] ${(err as Error).message}`);
+    return [];
+  }
 }
 
 export function getLastIngestTime(): number {
@@ -98,7 +120,7 @@ export async function getAllSignals(): Promise<RawSignal[]> {
   return memorySignals;
 }
 
-export async function getSignalsForDomainTopic(domain: string, topic: string, allowFanOut: boolean = true): Promise<RawSignal[]> {
+export async function getSignalsForDomainTopic(domain: string, topic: string): Promise<RawSignal[]> {
   if (useRedis) {
     const cached = await getSignalsFromRedis(signalKey(domain, topic));
     if (cached.length > 0) return cached;
@@ -107,19 +129,7 @@ export async function getSignalsForDomainTopic(domain: string, topic: string, al
     if (cached.length > 0) return cached;
   }
 
-  if (!allowFanOut) return [];
-
-  const fresh = await fanOutForDomain(domain, topic);
-  if (fresh.length > 0) {
-    memorySignals.push(...fresh);
-    lastIngestAt = Date.now();
-    if (useRedis) {
-      const redis = getRedis();
-      await redis.set(signalKey(domain, topic), JSON.stringify(fresh), "EX", CACHE_TTL_SIGNAL);
-    }
-  }
-
-  return fresh;
+  return await fanOutForDomain(domain, topic);
 }
 
 export async function getSignalsForTopic(topic: string): Promise<RawSignal[]> {
@@ -139,17 +149,6 @@ export async function getUniqueDomainsByTopic(topic: string): Promise<string[]> 
   return Array.from(domains);
 }
 
-async function runSource(name: string, fn: () => Promise<RawSignal[]>): Promise<{ name: string; signals: RawSignal[] }> {
-  try {
-    const signals = await fn();
-    console.error(`  ${name}: ${signals.length} signals`);
-    return { name, signals };
-  } catch (err) {
-    console.error(`  ${name}: FAILED - ${(err as Error).message}`);
-    return { name, signals: [] };
-  }
-}
-
 export async function runFullIngestion(): Promise<{
   total: number;
   bySources: Record<string, number>;
@@ -163,32 +162,7 @@ export async function runFullIngestion(): Promise<{
     console.error("  Redis unavailable — using in-memory store");
   }
 
-  const allSignals: RawSignal[] = [];
-  const bySources: Record<string, number> = {};
-
-  const reddit = await runSource("reddit", ingestRedditRSS);
-  allSignals.push(...reddit.signals);
-  bySources["reddit"] = reddit.signals.length;
-
-  const github = await runSource("github", ingestGitHub);
-  allSignals.push(...github.signals);
-  bySources["github"] = github.signals.length;
-
-  const news = await runSource("news", ingestNewsData);
-  allSignals.push(...news.signals);
-  bySources["news"] = news.signals.length;
-
-  const jobs = await runSource("jobs", ingestAdzuna);
-  allSignals.push(...jobs.signals);
-  bySources["jobs"] = jobs.signals.length;
-
-  const linkedin = await runSource("linkedin", ingestLinkedIn);
-  allSignals.push(...linkedin.signals);
-  bySources["linkedin"] = linkedin.signals.length;
-
-  const hackernews = await runSource("hackernews", ingestHackerNews);
-  allSignals.push(...hackernews.signals);
-  bySources["hackernews"] = hackernews.signals.length;
+  const { allSignals, bySources } = await runSequentialIngestors();
 
   memorySignals = allSignals;
   lastIngestAt = Date.now();

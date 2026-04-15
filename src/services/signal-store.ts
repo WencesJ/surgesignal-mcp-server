@@ -187,77 +187,50 @@ async function mergeSignals(source: string, newSignals: RawSignal[]): Promise<vo
   }
 }
 
-export function startCronSchedule(): void {
-  const ONE_HOUR = 60 * 60 * 1000;
-  const TWO_HOURS = 2 * 60 * 60 * 1000;
-  const FOUR_HOURS = 4 * 60 * 60 * 1000;
-  const SIX_HOURS = 6 * 60 * 60 * 1000;
+let cronRunning = false;
 
-  setInterval(async () => {
-    console.error("[cron] Reddit ingestion starting...");
+async function runCronCycle(): Promise<void> {
+  if (cronRunning) {
+    console.error("[cron] Previous cycle still running, skipping...");
+    return;
+  }
+  cronRunning = true;
+  console.error("[cron] Starting sequential refresh cycle...");
+
+  const sources: { name: string; fn: () => Promise<RawSignal[]> }[] = [
+    { name: "reddit", fn: ingestRedditRSS },
+    { name: "github", fn: ingestGitHub },
+    { name: "news", fn: ingestNewsData },
+    { name: "jobs", fn: ingestAdzuna },
+    { name: "linkedin", fn: ingestLinkedIn },
+    { name: "hackernews", fn: ingestHackerNews },
+  ];
+
+  for (const { name, fn } of sources) {
+    const start = Date.now();
     try {
-      const signals = await ingestRedditRSS();
-      await mergeSignals("reddit", signals);
-      console.error(`[cron] Reddit: ${signals.length} signals`);
+      const signals = await fn();
+      await mergeSignals(name, signals);
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`[cron] ${name}: ${signals.length} signals (${elapsed}s)`);
     } catch (err) {
-      console.error("[cron] Reddit failed:", (err as Error).message);
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`[cron] ${name}: FAILED (${elapsed}s) - ${(err as Error).message}`);
     }
+  }
+
+  cronRunning = false;
+  console.error("[cron] Refresh cycle complete.");
+}
+
+export function startCronSchedule(): void {
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+
+  setInterval(() => {
+    runCronCycle().catch((err) =>
+      console.error("[cron] Cycle error:", (err as Error).message)
+    );
   }, TWO_HOURS);
 
-  setInterval(async () => {
-    console.error("[cron] GitHub ingestion starting...");
-    try {
-      const signals = await ingestGitHub();
-      await mergeSignals("github", signals);
-      console.error(`[cron] GitHub: ${signals.length} signals`);
-    } catch (err) {
-      console.error("[cron] GitHub failed:", (err as Error).message);
-    }
-  }, FOUR_HOURS);
-
-  setInterval(async () => {
-    console.error("[cron] News ingestion starting...");
-    try {
-      const signals = await ingestNewsData();
-      await mergeSignals("news", signals);
-      console.error(`[cron] News: ${signals.length} signals`);
-    } catch (err) {
-      console.error("[cron] News failed:", (err as Error).message);
-    }
-  }, ONE_HOUR);
-
-  setInterval(async () => {
-    console.error("[cron] Jobs ingestion starting...");
-    try {
-      const signals = await ingestAdzuna();
-      await mergeSignals("jobs", signals);
-      console.error(`[cron] Jobs: ${signals.length} signals`);
-    } catch (err) {
-      console.error("[cron] Jobs failed:", (err as Error).message);
-    }
-  }, SIX_HOURS);
-
-  setInterval(async () => {
-    console.error("[cron] LinkedIn ingestion starting...");
-    try {
-      const signals = await ingestLinkedIn();
-      await mergeSignals("linkedin", signals);
-      console.error(`[cron] LinkedIn: ${signals.length} signals`);
-    } catch (err) {
-      console.error("[cron] LinkedIn failed:", (err as Error).message);
-    }
-  }, FOUR_HOURS);
-
-  setInterval(async () => {
-    console.error("[cron] HackerNews ingestion starting...");
-    try {
-      const signals = await ingestHackerNews();
-      await mergeSignals("hackernews", signals);
-      console.error(`[cron] HackerNews: ${signals.length} signals`);
-    } catch (err) {
-      console.error("[cron] HackerNews failed:", (err as Error).message);
-    }
-  }, SIX_HOURS);
-
-  console.error("Cron schedule started: Reddit 2h, GitHub 4h, News 1h, Jobs 6h, LinkedIn 4h, HackerNews 6h");
+  console.error("Cron schedule started: full sequential refresh every 2h");
 }

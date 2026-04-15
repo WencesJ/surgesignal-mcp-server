@@ -29,7 +29,7 @@ export const SOURCE_WEIGHTS: Record<SignalSource, number> = {
 export const RECENCY_DECAY_HOURS = 168;
 
 export const CACHE_TTL_SURGE = 3600;
-export const CACHE_TTL_SIGNAL = 7200;
+export const CACHE_TTL_SIGNAL = 10800;
 
 export const CHARACTER_LIMIT = 50_000;
 export const DEFAULT_SCAN_LIMIT = 20;

@@ -1,6 +1,6 @@
 import { computeSurgeScore } from "../services/scoring-engine.js";
 import { resolveCompany, getOrCreateCompany } from "../services/company-resolver.js";
-import { getSignalsForDomainTopic, getUniqueDomainsByTopic, getLastIngestTime } from "../services/signal-store.js";
+import { getAllSignals, getLastIngestTime } from "../services/signal-store.js";
 import type { ScanTopicInput, SurgeScore } from "../schemas/surge.js";
 
 export async function handleScanTopic(params: Partial<ScanTopicInput>) {
@@ -9,14 +9,20 @@ export async function handleScanTopic(params: Partial<ScanTopicInput>) {
   const limit = params.limit ?? 20;
   const offset = params.offset ?? 0;
 
-  const domains = await getUniqueDomainsByTopic(topic);
+  const allSignals = await getAllSignals();
+  const topicSignals = allSignals.filter((s) => s.topic === topic);
   const cachedAt = getLastIngestTime();
+
+  const domainSet = new Set<string>();
+  for (const s of topicSignals) {
+    domainSet.add(s.domain);
+  }
 
   const scored: SurgeScore[] = [];
 
-  for (const domain of domains) {
+  for (const domain of domainSet) {
     const company = resolveCompany(domain) || getOrCreateCompany(domain);
-    const signals = await getSignalsForDomainTopic(company.canonical_domain, topic);
+    const signals = topicSignals.filter((s) => s.domain === domain);
 
     const score = computeSurgeScore(
       company.canonical_domain,

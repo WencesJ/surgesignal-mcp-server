@@ -290,12 +290,31 @@ function startKeepAlive() {
   }, 10 * 60 * 1000);
 }
 
+const INGESTION_TIMEOUT_MS = 4 * 60 * 1000;
+
 const port = parseInt(process.env.PORT || "3000");
-app.listen(port, async () => {
+app.listen(port, () => {
   console.error(`SurgeSignal MCP server running on http://localhost:${port}`);
-  console.error("Running initial data ingestion...");
-  await runFullIngestion();
-  startCronSchedule();
-  startKeepAlive();
-  console.error("Ready to serve requests.");
+  console.error("Running initial data ingestion (4 min timeout)...");
+
+  const ingestionPromise = runFullIngestion()
+    .then((result) => {
+      console.error(`Ingestion succeeded: ${result.total} signals`);
+    })
+    .catch((err) => {
+      console.error(`Ingestion error: ${(err as Error).message}`);
+    });
+
+  const timeoutPromise = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      console.error("Ingestion timeout reached (4 min) — server ready with partial data");
+      resolve();
+    }, INGESTION_TIMEOUT_MS);
+  });
+
+  Promise.race([ingestionPromise, timeoutPromise]).then(() => {
+    startCronSchedule();
+    startKeepAlive();
+    console.error("Ready to serve requests.");
+  });
 });

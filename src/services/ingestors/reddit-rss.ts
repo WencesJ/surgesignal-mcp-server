@@ -197,7 +197,7 @@ async function ingestSubreddits(): Promise<RawSignal[]> {
       console.error(`Failed to fetch r/${subreddit}:`, (err as Error).message);
     }
 
-    await delay(2000);
+    await delay(1000);
   }
 
   return signals;
@@ -219,7 +219,7 @@ async function ingestTargetedCompanies(): Promise<RawSignal[]> {
       console.error(`Failed targeted search for "${companyName}":`, (err as Error).message);
     }
 
-    await delay(2000);
+    await delay(1000);
   }
 
   return signals;

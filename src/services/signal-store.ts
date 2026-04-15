@@ -1,13 +1,15 @@
 import type { RawSignal } from "../schemas/surge.js";
 import type { SignalSource } from "../constants.js";
-import { REDIS_SIGNAL_PREFIX, CACHE_TTL_SIGNAL } from "../constants.js";
+import type { CoveredTopic } from "../constants.js";
+import { REDIS_SIGNAL_PREFIX, CACHE_TTL_SIGNAL, COVERED_TOPICS } from "../constants.js";
 import { getRedis, isRedisAvailable } from "./redis.js";
-import { ingestRedditRSS } from "./ingestors/reddit-rss.js";
-import { ingestGitHub } from "./ingestors/github.js";
-import { ingestNewsData } from "./ingestors/newsdata.js";
-import { ingestAdzuna } from "./ingestors/adzuna.js";
-import { ingestLinkedInDirect as ingestLinkedIn } from "./ingestors/linkedin.js";
-import { ingestHackerNews } from "./ingestors/hackernews.js";
+import { getOrCreateCompany, deriveCompanyName } from "./company-resolver.js";
+import { ingestRedditRSS, searchRedditForCompany } from "./ingestors/reddit-rss.js";
+import { ingestGitHub, searchGitHubForCompany } from "./ingestors/github.js";
+import { ingestNewsData, searchNewsForCompany } from "./ingestors/newsdata.js";
+import { ingestAdzuna, searchJobsForCompany } from "./ingestors/adzuna.js";
+import { ingestLinkedInDirect as ingestLinkedIn, searchLinkedInForCompany } from "./ingestors/linkedin.js";
+import { ingestHackerNews, searchHNForCompany } from "./ingestors/hackernews.js";
 
 let memorySignals: RawSignal[] = [];
 let lastIngestAt: number = 0;
@@ -54,55 +56,68 @@ async function getSignalsFromRedis(key: string): Promise<RawSignal[]> {
   return JSON.parse(raw) as RawSignal[];
 }
 
-async function runSequentialIngestors(): Promise<{ allSignals: RawSignal[]; bySources: Record<string, number> }> {
-  const ingestors: { name: string; fn: () => Promise<RawSignal[]> }[] = [
-    { name: "reddit", fn: ingestRedditRSS },
-    { name: "github", fn: ingestGitHub },
-    { name: "news", fn: ingestNewsData },
-    { name: "jobs", fn: ingestAdzuna },
-    { name: "linkedin", fn: ingestLinkedIn },
-    { name: "hackernews", fn: ingestHackerNews },
-  ];
-
-  const allSignals: RawSignal[] = [];
-  const bySources: Record<string, number> = {};
-
-  for (const { name, fn } of ingestors) {
-    const start = Date.now();
-    try {
-      const signals = await fn();
-      allSignals.push(...signals);
-      bySources[name] = signals.length;
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      console.error(`  ${name}: ${signals.length} signals (${elapsed}s)`);
-    } catch (err) {
-      bySources[name] = 0;
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      console.error(`  ${name}: FAILED (${elapsed}s) - ${(err as Error).message}`);
-    }
+function getTopicsForDomain(topic: string): CoveredTopic[] {
+  if (COVERED_TOPICS.includes(topic as CoveredTopic)) {
+    return [topic as CoveredTopic];
   }
-
-  return { allSignals, bySources };
+  return ["crm"] as CoveredTopic[];
 }
 
 async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal[]> {
-  console.error(`[fan-out] Cache miss for ${domain}:${topic}, fetching live...`);
+  const company = getOrCreateCompany(domain);
+  const companyName = company.display_name;
+  const topics = getTopicsForDomain(topic);
+
+  console.error(`[fan-out] Cache miss for ${domain}:${topic}, running dynamic lookup for "${companyName}"...`);
 
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error("Fan-out timeout after 20s")), 20000)
   );
 
   try {
-    const { allSignals } = await Promise.race([runSequentialIngestors(), timeout]);
+    const searchPromise = (async () => {
+      const results: RawSignal[] = [];
 
-    memorySignals = allSignals;
+      const sources: { name: string; fn: () => Promise<RawSignal[]> }[] = [
+        { name: "reddit", fn: () => searchRedditForCompany(companyName, domain, topics) },
+        { name: "hackernews", fn: () => searchHNForCompany(companyName, domain, topics) },
+        { name: "news", fn: () => searchNewsForCompany(companyName, domain, topics) },
+        { name: "jobs", fn: () => searchJobsForCompany(companyName, domain, topics) },
+        { name: "github", fn: () => searchGitHubForCompany(companyName, domain, topics) },
+        { name: "linkedin", fn: () => searchLinkedInForCompany(companyName, domain, topics) },
+      ];
+
+      for (const { name, fn } of sources) {
+        const start = Date.now();
+        try {
+          const signals = await fn();
+          results.push(...signals);
+          const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+          console.error(`  [fan-out] ${name}: ${signals.length} signals (${elapsed}s)`);
+        } catch (err) {
+          const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+          console.error(`  [fan-out] ${name}: FAILED (${elapsed}s) - ${(err as Error).message}`);
+        }
+      }
+
+      return results;
+    })();
+
+    const dynamicSignals = await Promise.race([searchPromise, timeout]);
+
+    memorySignals = [...memorySignals, ...dynamicSignals];
     lastIngestAt = Date.now();
 
     if (useRedis) {
-      await storeSignalsInRedis(allSignals);
+      const key = signalKey(domain, topic);
+      const filtered = dynamicSignals.filter((s) => s.domain === domain && s.topic === topic);
+      if (filtered.length > 0) {
+        const redis = getRedis();
+        await redis.set(key, JSON.stringify(filtered), "EX", CACHE_TTL_SIGNAL);
+      }
     }
 
-    return allSignals.filter((s) => s.domain === domain && s.topic === topic);
+    return dynamicSignals.filter((s) => s.domain === domain && s.topic === topic);
   } catch (err) {
     console.error(`[fan-out] ${(err as Error).message}`);
     return [];
@@ -147,6 +162,37 @@ export async function getUniqueDomainsByTopic(topic: string): Promise<string[]> 
     domains.add(s.domain);
   }
   return Array.from(domains);
+}
+
+async function runSequentialIngestors(): Promise<{ allSignals: RawSignal[]; bySources: Record<string, number> }> {
+  const ingestors: { name: string; fn: () => Promise<RawSignal[]> }[] = [
+    { name: "reddit", fn: ingestRedditRSS },
+    { name: "github", fn: ingestGitHub },
+    { name: "news", fn: ingestNewsData },
+    { name: "jobs", fn: ingestAdzuna },
+    { name: "linkedin", fn: ingestLinkedIn },
+    { name: "hackernews", fn: ingestHackerNews },
+  ];
+
+  const allSignals: RawSignal[] = [];
+  const bySources: Record<string, number> = {};
+
+  for (const { name, fn } of ingestors) {
+    const start = Date.now();
+    try {
+      const signals = await fn();
+      allSignals.push(...signals);
+      bySources[name] = signals.length;
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`  ${name}: ${signals.length} signals (${elapsed}s)`);
+    } catch (err) {
+      bySources[name] = 0;
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.error(`  ${name}: FAILED (${elapsed}s) - ${(err as Error).message}`);
+    }
+  }
+
+  return { allSignals, bySources };
 }
 
 export async function runFullIngestion(): Promise<{

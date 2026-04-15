@@ -1,5 +1,5 @@
 import type { RawSignal } from "../../schemas/surge.js";
-import { getOrCreateCompany, normalizeDomain, getAllCompanies } from "../company-resolver.js";
+import { getOrCreateCompany, normalizeDomain } from "../company-resolver.js";
 import type { CoveredTopic } from "../../constants.js";
 
 const USER_AGENT = "SurgeSignal/1.0 (intent-data-aggregator)";
@@ -220,6 +220,20 @@ async function ingestTargetedCompanies(): Promise<RawSignal[]> {
     }
 
     await delay(1000);
+  }
+
+  return signals;
+}
+
+export async function searchRedditForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  const signals: RawSignal[] = [];
+
+  try {
+    const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(companyName)}&sort=new&limit=15&t=month`;
+    const posts = await fetchRedditJSON(url);
+    signals.push(...processPostsForSignals(posts, topics, domain));
+  } catch (err) {
+    console.error(`[dynamic] Reddit search for "${companyName}": ${(err as Error).message}`);
   }
 
   return signals;

@@ -1,5 +1,5 @@
 import type { RawSignal } from "../../schemas/surge.js";
-import { getOrCreateCompany } from "../company-resolver.js";
+import { getOrCreateCompany, deriveGitHubOrg } from "../company-resolver.js";
 import type { CoveredTopic } from "../../constants.js";
 
 const USER_AGENT = "SurgeSignal/1.0 (intent-data-aggregator)";
@@ -33,6 +33,15 @@ interface GitHubIssue {
   html_url: string;
   created_at: string;
   user: { login: string } | null;
+}
+
+interface GitHubRepo {
+  full_name: string;
+  html_url: string;
+  description: string | null;
+  open_issues_count: number;
+  stargazers_count: number;
+  updated_at: string;
 }
 
 function delay(ms: number): Promise<void> {
@@ -96,6 +105,71 @@ async function fetchRecentIssues(repo: string): Promise<GitHubIssue[]> {
   }
 
   return res.json() as Promise<GitHubIssue[]>;
+}
+
+async function fetchOrgRepos(org: string): Promise<GitHubRepo[]> {
+  const url = `https://api.github.com/orgs/${org}/repos?sort=updated&per_page=5&type=public`;
+
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/vnd.github.v3+json",
+  };
+
+  if (process.env.GITHUB_TOKEN) {
+    headers["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+
+  if (!res.ok) {
+    throw new Error(`Status ${res.status}`);
+  }
+
+  return res.json() as Promise<GitHubRepo[]>;
+}
+
+export async function searchGitHubForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  const signals: RawSignal[] = [];
+  const company = getOrCreateCompany(domain);
+  const org = company.github_org || deriveGitHubOrg(domain);
+
+  try {
+    const repos = await fetchOrgRepos(org);
+
+    for (const repo of repos) {
+      if (repo.open_issues_count === 0) continue;
+
+      try {
+        const issues = await fetchRecentIssues(repo.full_name);
+
+        for (const issue of issues) {
+          const title = issue.title || "";
+          const body = issue.body || "";
+          const relevance = scoreIssueRelevance(title, body);
+
+          for (const topic of topics) {
+            signals.push({
+              source: "github",
+              domain: company.canonical_domain,
+              topic,
+              score: Math.min(1, relevance * 0.5),
+              timestamp: issue.created_at,
+              evidence_url: issue.html_url,
+              evidence_snippet: `Issue on ${repo.full_name}: ${title.slice(0, 200)}`,
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`[dynamic] GitHub issues for ${repo.full_name}: ${(err as Error).message}`);
+      }
+
+      await delay(500);
+    }
+  } catch (err) {
+    console.error(`[dynamic] GitHub org "${org}" for "${companyName}": ${(err as Error).message}`);
+  }
+
+  return signals;
 }
 
 export async function ingestGitHub(): Promise<RawSignal[]> {

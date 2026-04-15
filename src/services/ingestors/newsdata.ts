@@ -215,16 +215,50 @@ async function ingestTargetedCompanyNews(): Promise<RawSignal[]> {
   return signals;
 }
 
+export async function searchNewsForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  if (!API_KEY) return [];
+
+  const signals: RawSignal[] = [];
+
+  try {
+    const articles = await fetchNews(companyName);
+    const company = getOrCreateCompany(domain);
+
+    for (const article of articles) {
+      const title = article.title || "";
+      const description = article.description || "";
+      const relevance = scoreRelevance(title, description);
+      const timestamp = article.pubDate
+        ? new Date(article.pubDate).toISOString()
+        : new Date().toISOString();
+
+      for (const topic of topics) {
+        signals.push({
+          source: "news",
+          domain: company.canonical_domain,
+          topic,
+          score: relevance,
+          timestamp,
+          evidence_url: article.link,
+          evidence_snippet: title.slice(0, 500),
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`[dynamic] News search for "${companyName}": ${(err as Error).message}`);
+  }
+
+  return signals;
+}
+
 export async function ingestNewsData(): Promise<RawSignal[]> {
   if (!API_KEY) {
     console.error("NEWSDATA_API_KEY not set, skipping news ingestion");
     return [];
   }
 
-  const [genericSignals, targetedSignals] = await Promise.all([
-    ingestGenericNews(),
-    ingestTargetedCompanyNews(),
-  ]);
+  const genericSignals = await ingestGenericNews();
+  const targetedSignals = await ingestTargetedCompanyNews();
 
   return [...genericSignals, ...targetedSignals];
 }

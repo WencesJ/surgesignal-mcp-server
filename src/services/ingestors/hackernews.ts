@@ -212,6 +212,35 @@ async function ingestGenericSearches(): Promise<RawSignal[]> {
   return signals;
 }
 
+export async function searchHNForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  const signals: RawSignal[] = [];
+
+  try {
+    const hits = await searchHN(companyName, 15);
+    const company = getOrCreateCompany(domain);
+
+    for (const hit of hits) {
+      const relevance = scoreRelevance(hit.title, hit.points, hit.num_comments);
+
+      for (const topic of topics) {
+        signals.push({
+          source: "hackernews",
+          domain: company.canonical_domain,
+          topic,
+          score: relevance,
+          timestamp: hit.created_at || new Date().toISOString(),
+          evidence_url: `https://news.ycombinator.com/item?id=${hit.objectID}`,
+          evidence_snippet: `${hit.title} (${hit.points} points, ${hit.num_comments} comments)`,
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`[dynamic] HN search for "${companyName}": ${(err as Error).message}`);
+  }
+
+  return signals;
+}
+
 export async function ingestHackerNews(): Promise<RawSignal[]> {
   const targetedSignals = await ingestTargetedCompanies();
   const genericSignals = await ingestGenericSearches();

@@ -105,6 +105,48 @@ async function fetchJobs(keyword: string): Promise<AdzunaJob[]> {
   return json.results || [];
 }
 
+export async function searchJobsForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  if (!APP_ID || !APP_KEY) return [];
+
+  const signals: RawSignal[] = [];
+
+  try {
+    const jobs = await fetchJobs(companyName);
+    const company = getOrCreateCompany(domain);
+
+    for (const job of jobs) {
+      const title = job.title || "";
+      const description = job.description || "";
+      const jobCompany = job.company?.display_name || "";
+      const relevance = scoreJobRelevance(title, description);
+      const timestamp = job.created
+        ? new Date(job.created).toISOString()
+        : new Date().toISOString();
+
+      const companyNameLower = companyName.toLowerCase();
+      const jobCompanyLower = jobCompany.toLowerCase();
+
+      if (jobCompanyLower.includes(companyNameLower) || companyNameLower.includes(jobCompanyLower)) {
+        for (const topic of topics) {
+          signals.push({
+            source: "jobs",
+            domain: company.canonical_domain,
+            topic,
+            score: relevance,
+            timestamp,
+            evidence_url: job.redirect_url,
+            evidence_snippet: `${jobCompany} hiring: ${title}`.slice(0, 500),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[dynamic] Jobs search for "${companyName}": ${(err as Error).message}`);
+  }
+
+  return signals;
+}
+
 export async function ingestAdzuna(): Promise<RawSignal[]> {
   if (!APP_ID || !APP_KEY) {
     console.error("ADZUNA_APP_ID or ADZUNA_APP_KEY not set, skipping jobs ingestion");

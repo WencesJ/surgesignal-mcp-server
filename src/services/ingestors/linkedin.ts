@@ -1,5 +1,5 @@
 import type { RawSignal } from "../../schemas/surge.js";
-import { getOrCreateCompany } from "../company-resolver.js";
+import { getOrCreateCompany, deriveLinkedInSlug } from "../company-resolver.js";
 import { fetchWithProxy, isProxyConfigured } from "../proxy.js";
 import type { CoveredTopic } from "../../constants.js";
 
@@ -90,6 +90,39 @@ async function fetchCompanyPosts(slug: string): Promise<string[]> {
 
   const html = await res.text();
   return extractPostTexts(html);
+}
+
+export async function searchLinkedInForCompany(companyName: string, domain: string, topics: CoveredTopic[]): Promise<RawSignal[]> {
+  if (!isProxyConfigured()) return [];
+
+  const signals: RawSignal[] = [];
+  const company = getOrCreateCompany(domain);
+
+  const knownSlug = company.linkedin_slug || deriveLinkedInSlug(domain);
+
+  try {
+    const postTexts = await fetchCompanyPosts(knownSlug);
+
+    for (const text of postTexts) {
+      const relevance = scoreRelevance(text);
+
+      for (const topic of topics) {
+        signals.push({
+          source: "linkedin",
+          domain: company.canonical_domain,
+          topic,
+          score: relevance,
+          timestamp: new Date().toISOString(),
+          evidence_url: `https://www.linkedin.com/company/${knownSlug}/posts/`,
+          evidence_snippet: text.slice(0, 500),
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`[dynamic] LinkedIn for "${companyName}" (slug: ${knownSlug}): ${(err as Error).message}`);
+  }
+
+  return signals;
 }
 
 export async function ingestLinkedInDirect(): Promise<RawSignal[]> {

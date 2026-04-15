@@ -6,8 +6,8 @@ import { ingestRedditRSS } from "./ingestors/reddit-rss.js";
 import { ingestGitHub } from "./ingestors/github.js";
 import { ingestNewsData } from "./ingestors/newsdata.js";
 import { ingestAdzuna } from "./ingestors/adzuna.js";
-import { ingestLinkedIn } from "./ingestors/apify.js";
-import { ingestG2Free } from "./ingestors/g2.js";
+import { ingestLinkedInDirect as ingestLinkedIn } from "./ingestors/linkedin.js";
+import { ingestHackerNews } from "./ingestors/hackernews.js";
 
 let memorySignals: RawSignal[] = [];
 let lastIngestAt: number = 0;
@@ -186,9 +186,9 @@ export async function runFullIngestion(): Promise<{
   allSignals.push(...linkedin.signals);
   bySources["linkedin"] = linkedin.signals.length;
 
-  const g2 = await runSource("g2", ingestG2Free);
-  allSignals.push(...g2.signals);
-  bySources["g2"] = g2.signals.length;
+  const hackernews = await runSource("hackernews", ingestHackerNews);
+  allSignals.push(...hackernews.signals);
+  bySources["hackernews"] = hackernews.signals.length;
 
   memorySignals = allSignals;
   lastIngestAt = Date.now();
@@ -275,15 +275,15 @@ export function startCronSchedule(): void {
   }, FOUR_HOURS);
 
   setInterval(async () => {
-    console.error("[cron] G2 ingestion starting...");
+    console.error("[cron] HackerNews ingestion starting...");
     try {
-      const signals = await ingestG2Free();
-      await mergeSignals("g2", signals);
-      console.error(`[cron] G2: ${signals.length} signals`);
+      const signals = await ingestHackerNews();
+      await mergeSignals("hackernews", signals);
+      console.error(`[cron] HackerNews: ${signals.length} signals`);
     } catch (err) {
-      console.error("[cron] G2 failed:", (err as Error).message);
+      console.error("[cron] HackerNews failed:", (err as Error).message);
     }
   }, SIX_HOURS);
 
-  console.error("Cron schedule started: Reddit 2h, GitHub 4h, News 1h, Jobs 6h, LinkedIn 4h, G2 6h");
+  console.error("Cron schedule started: Reddit 2h, GitHub 4h, News 1h, Jobs 6h, LinkedIn 4h, HackerNews 6h");
 }

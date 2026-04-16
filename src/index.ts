@@ -58,7 +58,7 @@ const TOOLS = [
       surface: "both",
       queryEligible: true,
       latencyClass: "instant",
-      pricing: { executeUsd: "0.005" },
+      pricing: { executeUsd: "0.00" },
     },
   },
   {
@@ -108,7 +108,7 @@ const TOOLS = [
       surface: "both",
       queryEligible: true,
       latencyClass: "instant",
-      pricing: { executeUsd: "0.005" },
+      pricing: { executeUsd: "0.00" },
     },
   },
   {
@@ -150,7 +150,7 @@ const TOOLS = [
       surface: "both",
       queryEligible: true,
       latencyClass: "instant",
-      pricing: { executeUsd: "0.005" },
+      pricing: { executeUsd: "0.00" },
     },
   },
 ];

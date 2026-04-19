@@ -290,7 +290,7 @@ function startKeepAlive() {
   }, 10 * 60 * 1000);
 }
 
-const INGESTION_TIMEOUT_MS = 4 * 60 * 1000;
+const INGESTION_TIMEOUT_MS = 6 * 60 * 1000;
 
 const port = parseInt(process.env.PORT || "3000");
 app.listen(port, () => {

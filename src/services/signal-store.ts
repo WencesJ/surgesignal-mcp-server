@@ -71,7 +71,7 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
   console.error(`[fan-out] Cache miss for ${domain}:${topic}, running dynamic lookup for "${companyName}"...`);
 
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Fan-out timeout after 20s")), 20000)
+    setTimeout(() => reject(new Error("Fan-out timeout after 20s")), 40000)
   );
 
   try {
@@ -137,8 +137,14 @@ export async function getAllSignals(): Promise<RawSignal[]> {
 
 export async function getSignalsForDomainTopic(domain: string, topic: string): Promise<RawSignal[]> {
   if (useRedis) {
-    const cached = await getSignalsFromRedis(signalKey(domain, topic));
-    if (cached.length > 0) return cached;
+    const all = await getSignalsFromRedis(allSignalsKey());
+    if (all.length > 0) {
+      const filtered = all.filter((s) => s.domain === domain && s.topic === topic);
+      if (filtered.length > 0) return filtered;
+    } else {
+      const cached = await getSignalsFromRedis(signalKey(domain, topic));
+      if (cached.length > 0) return cached;
+    }
   } else {
     const cached = memorySignals.filter((s) => s.domain === domain && s.topic === topic);
     if (cached.length > 0) return cached;

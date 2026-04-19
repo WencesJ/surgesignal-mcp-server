@@ -8,6 +8,26 @@ import {
 } from "../constants.js";
 import type { RawSignal, SignalBreakdown, SurgeScore } from "../schemas/surge.js";
 
+const NOISE_PATTERNS = [
+  /sign in with/i,
+  /privacy policy/i,
+  /cookie policy/i,
+  /user agreement/i,
+  /by clicking continue/i,
+  /accept.*cookies/i,
+  /passkey/i,
+  /looking for a silvestratus/i,
+  /navigator of the sea/i,
+  /working class keep the government/i,
+  /r\u00f6stet mein depot/i,
+  /kako u/i,
+];
+
+function isNoiseSignal(signal: RawSignal): boolean {
+  const text = (signal.evidence_snippet || "").toLowerCase();
+  return NOISE_PATTERNS.some((p) => p.test(text));
+}
+
 function recencyWeight(signalTimestamp: string): number {
   const ageMs = Date.now() - new Date(signalTimestamp).getTime();
   const ageHours = ageMs / (1000 * 60 * 60);
@@ -27,7 +47,10 @@ function aggregateSourceSignals(signals: RawSignal[]): {
     return { rawScore: 0, signalCount: 0, freshestSignal: undefined, topEvidence: undefined };
   }
 
-  const sorted = [...signals].sort(
+  const cleanSignals = signals.filter((s) => !isNoiseSignal(s));
+  const scoringSignals = cleanSignals.length > 0 ? cleanSignals : signals;
+
+  const sorted = [...scoringSignals].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
 
@@ -36,15 +59,21 @@ function aggregateSourceSignals(signals: RawSignal[]): {
 
   for (const signal of sorted) {
     const rw = recencyWeight(signal.timestamp);
-    weightedSum += signal.score * rw;
+    const signalScore = isNoiseSignal(signal) ? signal.score * 0.1 : signal.score;
+    weightedSum += signalScore * rw;
     weightTotal += rw;
   }
 
   const rawScore = weightTotal > 0 ? weightedSum / weightTotal : 0;
-  const volumeMultiplier = Math.min(1.3, 1 + Math.log2(signals.length) * 0.1);
+
+  const volumeBonus = signals.length >= 15 ? 0.25
+    : signals.length >= 10 ? 0.18
+    : signals.length >= 5 ? 0.10
+    : signals.length >= 2 ? 0.05
+    : 0;
 
   return {
-    rawScore: Math.min(1, rawScore * volumeMultiplier),
+    rawScore: Math.min(1, rawScore + volumeBonus),
     signalCount: signals.length,
     freshestSignal: sorted[0]?.timestamp,
     topEvidence: sorted[0]?.evidence_snippet,
@@ -71,6 +100,7 @@ export function computeSurgeScore(
 
   const breakdown: SignalBreakdown[] = [];
   let compositeScore = 0;
+  let activeSources = 0;
 
   for (const source of SIGNAL_SOURCES) {
     const signals = bySource.get(source) ?? [];
@@ -79,6 +109,7 @@ export function computeSurgeScore(
     const weightedScore = rawScore * weight * SURGE_MAX;
 
     compositeScore += weightedScore;
+    if (signalCount > 0) activeSources++;
 
     breakdown.push({
       source,
@@ -91,7 +122,19 @@ export function computeSurgeScore(
     });
   }
 
-  const finalScore = Math.min(SURGE_MAX, Math.round(compositeScore));
+  const diversityBonus = activeSources >= 5 ? 12
+    : activeSources >= 4 ? 8
+    : activeSources >= 3 ? 4
+    : activeSources >= 2 ? 2
+    : 0;
+
+  const totalSignalBonus = allSignals.length >= 50 ? 8
+    : allSignals.length >= 30 ? 5
+    : allSignals.length >= 20 ? 3
+    : allSignals.length >= 10 ? 1
+    : 0;
+
+  const finalScore = Math.min(SURGE_MAX, Math.round(compositeScore + diversityBonus + totalSignalBonus));
   const dataAgeMs = cachedAtMs ? Date.now() - cachedAtMs : 0;
   const freshnessSecs = Math.round(dataAgeMs / 1000);
 
@@ -121,5 +164,5 @@ export function explainScoringFormula(breakdown: SignalBreakdown[]): string {
     return "No signals detected. Composite score = 0.";
   }
 
-  return `Composite = ${parts.join(" + ")}. Scores ≥ 60 indicate active buying intent.`;
+  return `Composite = ${parts.join(" + ")} + source diversity bonus + volume bonus. Scores ≥ 60 indicate active buying intent.`;
 }

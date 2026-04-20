@@ -1,4 +1,4 @@
-import { computeSurgeScore, explainScoringFormula } from "../services/scoring-engine.js";
+import { computeSurgeScore, explainScoringFormula, filterRelevantSignals } from "../services/scoring-engine.js";
 import { resolveCompany, getOrCreateCompany, normalizeDomain } from "../services/company-resolver.js";
 import { getSignalsForDomainTopic, getLastIngestTime } from "../services/signal-store.js";
 import { SIGNAL_SOURCES } from "../constants.js";
@@ -9,14 +9,16 @@ export async function handleExplainSignals(params: Partial<ExplainSignalsInput>)
   const topic = params.topic || "crm";
 
   const company = resolveCompany(domain) || getOrCreateCompany(domain);
-  const signals = await getSignalsForDomainTopic(company.canonical_domain, topic);
+  const rawSignals = await getSignalsForDomainTopic(company.canonical_domain, topic);
   const cachedAt = getLastIngestTime();
+
+  const signals = filterRelevantSignals(rawSignals, topic);
 
   const score = computeSurgeScore(
     company.canonical_domain,
     topic,
     company.display_name,
-    signals,
+    rawSignals,
     cachedAt,
   );
 

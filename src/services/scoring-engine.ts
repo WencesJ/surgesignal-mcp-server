@@ -4,7 +4,10 @@ import {
   RECENCY_DECAY_HOURS,
   SURGE_THRESHOLD,
   SURGE_MAX,
+  TOPIC_KEYWORDS,
+  B2B_SUBREDDIT_WHITELIST,
   type SignalSource,
+  type CoveredTopic,
 } from "../constants.js";
 import type { RawSignal, SignalBreakdown, SurgeScore } from "../schemas/surge.js";
 
@@ -26,6 +29,27 @@ const NOISE_PATTERNS = [
 function isNoiseSignal(signal: RawSignal): boolean {
   const text = (signal.evidence_snippet || "").toLowerCase();
   return NOISE_PATTERNS.some((p) => p.test(text));
+}
+
+export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
+  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
+}
+
+function isTopicRelevant(signal: RawSignal, topic: string): boolean {
+  const snippet = (signal.evidence_snippet || "").toLowerCase();
+
+  if (signal.source === "reddit") {
+    const subredditMatch = (signal.evidence_url || "").match(/reddit\.com\/r\/([^/]+)/i);
+    if (subredditMatch) {
+      const subreddit = subredditMatch[1].toLowerCase();
+      if (!B2B_SUBREDDIT_WHITELIST.has(subreddit)) {
+        return false;
+      }
+    }
+  }
+
+  const keywords = TOPIC_KEYWORDS[topic as CoveredTopic] ?? [];
+  return keywords.some((kw) => snippet.includes(kw.toLowerCase()));
 }
 
 function recencyWeight(signalTimestamp: string): number {
@@ -66,7 +90,8 @@ function aggregateSourceSignals(signals: RawSignal[]): {
 
   const rawScore = weightTotal > 0 ? weightedSum / weightTotal : 0;
 
-  const volumeBonus = signals.length >= 15 ? 0.25
+  const volumeBonus =
+    signals.length >= 15 ? 0.25
     : signals.length >= 10 ? 0.18
     : signals.length >= 5 ? 0.10
     : signals.length >= 2 ? 0.05
@@ -89,52 +114,92 @@ export function computeSurgeScore(
 ): SurgeScore {
   const now = new Date().toISOString();
 
+  const relevantSignals = allSignals.filter(
+    (s) => !isNoiseSignal(s) && isTopicRelevant(s, topic)
+  );
+
   const bySource = new Map<SignalSource, RawSignal[]>();
   for (const src of SIGNAL_SOURCES) {
     bySource.set(src, []);
   }
-  for (const signal of allSignals) {
+  for (const signal of relevantSignals) {
     const arr = bySource.get(signal.source as SignalSource);
     if (arr) arr.push(signal);
   }
 
   const breakdown: SignalBreakdown[] = [];
-  let compositeScore = 0;
-  let activeSources = 0;
+  const activeSourceWeights: {
+    source: SignalSource;
+    rawScore: number;
+    signalCount: number;
+    weight: number;
+    freshestSignal?: string;
+    topEvidence?: string;
+  }[] = [];
 
   for (const source of SIGNAL_SOURCES) {
     const signals = bySource.get(source) ?? [];
     const { rawScore, signalCount, freshestSignal, topEvidence } = aggregateSourceSignals(signals);
-    const weight = SOURCE_WEIGHTS[source];
-    const weightedScore = rawScore * weight * SURGE_MAX;
 
-    compositeScore += weightedScore;
-    if (signalCount > 0) activeSources++;
+    if (signalCount > 0) {
+      activeSourceWeights.push({
+        source,
+        rawScore,
+        signalCount,
+        weight: SOURCE_WEIGHTS[source],
+        freshestSignal,
+        topEvidence,
+      });
+    }
 
     breakdown.push({
       source,
       raw_score: Math.round(rawScore * 1000) / 1000,
-      weight,
-      weighted_score: Math.round(weightedScore * 10) / 10,
+      weight: SOURCE_WEIGHTS[source],
+      weighted_score: 0,
       signal_count: signalCount,
       freshest_signal: freshestSignal,
       top_evidence: topEvidence,
     });
   }
 
-  const diversityBonus = activeSources >= 5 ? 12
+  const totalActiveWeight = activeSourceWeights.reduce((sum, s) => sum + s.weight, 0);
+  const weightNormalizer = totalActiveWeight > 0 ? 1 / totalActiveWeight : 1;
+
+  let compositeScore = 0;
+  const activeSources = activeSourceWeights.length;
+
+  for (const active of activeSourceWeights) {
+    const normalizedWeight = active.weight * weightNormalizer;
+    const weightedScore = active.rawScore * normalizedWeight * SURGE_MAX;
+    compositeScore += weightedScore;
+
+    const entry = breakdown.find((b) => b.source === active.source);
+    if (entry) {
+      entry.weight = Math.round(normalizedWeight * 1000) / 1000;
+      entry.weighted_score = Math.round(weightedScore * 10) / 10;
+    }
+  }
+
+  const diversityBonus =
+    activeSources >= 5 ? 12
     : activeSources >= 4 ? 8
     : activeSources >= 3 ? 4
     : activeSources >= 2 ? 2
     : 0;
 
-  const totalSignalBonus = allSignals.length >= 50 ? 8
-    : allSignals.length >= 30 ? 5
-    : allSignals.length >= 20 ? 3
-    : allSignals.length >= 10 ? 1
+  const totalSignalBonus =
+    relevantSignals.length >= 50 ? 8
+    : relevantSignals.length >= 30 ? 5
+    : relevantSignals.length >= 20 ? 3
+    : relevantSignals.length >= 10 ? 1
     : 0;
 
-  const finalScore = Math.min(SURGE_MAX, Math.round(compositeScore + diversityBonus + totalSignalBonus));
+  const finalScore = Math.min(
+    SURGE_MAX,
+    Math.round(compositeScore + diversityBonus + totalSignalBonus)
+  );
+
   const dataAgeMs = cachedAtMs ? Date.now() - cachedAtMs : 0;
   const freshnessSecs = Math.round(dataAgeMs / 1000);
 
@@ -147,7 +212,7 @@ export function computeSurgeScore(
     data_freshness: freshnessSecs < 7200 ? "fresh" : "stale",
     freshness_secs: freshnessSecs,
     signal_breakdown: breakdown,
-    total_signals: allSignals.length,
+    total_signals: relevantSignals.length,
     scored_at: now,
   };
 }
@@ -157,12 +222,12 @@ export function explainScoringFormula(breakdown: SignalBreakdown[]): string {
     .filter((b) => b.signal_count > 0)
     .map(
       (b) =>
-        `${b.source}(${b.signal_count} signals × ${b.raw_score} relevance × ${b.weight} weight = ${b.weighted_score})`
+        `${b.source}(${b.signal_count} signals × ${b.raw_score} relevance × ${b.weight} effective_weight = ${b.weighted_score})`
     );
 
   if (parts.length === 0) {
-    return "No signals detected. Composite score = 0.";
+    return "No topic-relevant signals detected. Composite score = 0.";
   }
 
-  return `Composite = ${parts.join(" + ")} + source diversity bonus + volume bonus. Scores ≥ 60 indicate active buying intent.`;
+  return `Composite = ${parts.join(" + ")} + source diversity bonus + volume bonus. Weights normalized to active sources only. Scores ≥ 60 indicate active buying intent.`;
 }

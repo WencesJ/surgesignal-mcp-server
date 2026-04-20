@@ -1,7 +1,10 @@
 import { computeSurgeScore } from "../services/scoring-engine.js";
 import { resolveCompany, getOrCreateCompany } from "../services/company-resolver.js";
 import { getAllSignals, getLastIngestTime } from "../services/signal-store.js";
+import { SEED_COMPANIES } from "../constants.js";
 import type { ScanTopicInput, SurgeScore } from "../schemas/surge.js";
+
+const SEED_DOMAIN_SET = new Set<string>(SEED_COMPANIES);
 
 export async function handleScanTopic(params: Partial<ScanTopicInput>) {
   const topic = params.topic || "crm";
@@ -10,7 +13,9 @@ export async function handleScanTopic(params: Partial<ScanTopicInput>) {
   const offset = params.offset ?? 0;
 
   const allSignals = await getAllSignals();
-  const topicSignals = allSignals.filter((s) => s.topic === topic);
+  const topicSignals = allSignals.filter(
+    (s) => s.topic === topic && SEED_DOMAIN_SET.has(s.domain)
+  );
   const cachedAt = getLastIngestTime();
 
   const domainSet = new Set<string>();
@@ -49,5 +54,6 @@ export async function handleScanTopic(params: Partial<ScanTopicInput>) {
     offset,
     has_more: offset + limit < total,
     companies: page,
+    note: "Results scoped to tracked B2B SaaS companies. Enterprise-wide news sources excluded.",
   };
 }

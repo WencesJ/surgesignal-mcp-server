@@ -24,6 +24,9 @@ const NOISE_PATTERNS = [
   /working class keep the government/i,
   /r\u00f6stet mein depot/i,
   /kako u/i,
+  /buy verified/i,
+  /verified accounts/i,
+  /aged accounts/i,
 ];
 
 function isNoiseSignal(signal: RawSignal): boolean {
@@ -211,7 +214,7 @@ export function computeSurgeScore(
     is_surging: finalScore >= SURGE_THRESHOLD,
     data_freshness: freshnessSecs < 7200 ? "fresh" : "stale",
     freshness_secs: freshnessSecs,
-    signal_breakdown: breakdown,
+    signal_breakdown: breakdown.filter((b) => b.signal_count > 0),
     total_signals: relevantSignals.length,
     scored_at: now,
   };

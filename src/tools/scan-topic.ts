@@ -3,7 +3,6 @@ import { resolveCompany, getOrCreateCompany } from "../services/company-resolver
 import { getAllSignals, getLastIngestTime } from "../services/signal-store.js";
 import { FORTUNE500_BLOCKLIST } from "../constants.js";
 import type { ScanTopicInput, SurgeScore } from "../schemas/surge.js";
-
 const NON_SAAS_TLDS = new Set([".edu", ".gov", ".mil", ".ac"]);
 const NON_SAAS_KEYWORDS = ["university", "college", "hospital", "health", "medical", "bank", "insurance", "financial", "church", "school"];
 

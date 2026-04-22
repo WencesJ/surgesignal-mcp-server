@@ -19,14 +19,6 @@ const NOISE_PATTERNS = [
   /by clicking continue/i,
   /accept.*cookies/i,
   /passkey/i,
-  /looking for a silvestratus/i,
-  /navigator of the sea/i,
-  /working class keep the government/i,
-  /r\u00f6stet mein depot/i,
-  /kako u/i,
-  /buy verified/i,
-  /verified accounts/i,
-  /aged accounts/i,
 ];
 
 function isNoiseSignal(signal: RawSignal): boolean {
@@ -34,13 +26,11 @@ function isNoiseSignal(signal: RawSignal): boolean {
   return NOISE_PATTERNS.some((p) => p.test(text));
 }
 
-export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
-  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
-}
-
 function isTopicRelevant(signal: RawSignal, topic: string): boolean {
   const snippet = (signal.evidence_snippet || "").toLowerCase();
+  const url = (signal.evidence_url || "").toLowerCase();
 
+  // Reddit: must be from a whitelisted B2B subreddit
   if (signal.source === "reddit") {
     const subredditMatch = (signal.evidence_url || "").match(/reddit\.com\/r\/([^/]+)/i);
     if (subredditMatch) {
@@ -51,8 +41,16 @@ function isTopicRelevant(signal: RawSignal, topic: string): boolean {
     }
   }
 
+  // Topic keywords must appear in the evidence snippet or URL.
+  // NOTE: We intentionally do NOT fall back to domain name matching here.
+  // The domain name (e.g. "stripe") appears in almost every signal for that company,
+  // which would cause all topics for the same domain to return identical results.
   const keywords = TOPIC_KEYWORDS[topic as CoveredTopic] ?? [];
-  return keywords.some((kw) => snippet.includes(kw.toLowerCase()));
+  return keywords.some((kw) => snippet.includes(kw.toLowerCase()) || url.includes(kw.toLowerCase()));
+}
+
+export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
+  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
 }
 
 function recencyWeight(signalTimestamp: string): number {
@@ -74,10 +72,7 @@ function aggregateSourceSignals(signals: RawSignal[]): {
     return { rawScore: 0, signalCount: 0, freshestSignal: undefined, topEvidence: undefined };
   }
 
-  const cleanSignals = signals.filter((s) => !isNoiseSignal(s));
-  const scoringSignals = cleanSignals.length > 0 ? cleanSignals : signals;
-
-  const sorted = [...scoringSignals].sort(
+  const sorted = [...signals].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
 
@@ -86,8 +81,7 @@ function aggregateSourceSignals(signals: RawSignal[]): {
 
   for (const signal of sorted) {
     const rw = recencyWeight(signal.timestamp);
-    const signalScore = isNoiseSignal(signal) ? signal.score * 0.1 : signal.score;
-    weightedSum += signalScore * rw;
+    weightedSum += signal.score * rw;
     weightTotal += rw;
   }
 
@@ -117,6 +111,7 @@ export function computeSurgeScore(
 ): SurgeScore {
   const now = new Date().toISOString();
 
+  // Filter to only topic-relevant, non-noise signals
   const relevantSignals = allSignals.filter(
     (s) => !isNoiseSignal(s) && isTopicRelevant(s, topic)
   );
@@ -166,6 +161,7 @@ export function computeSurgeScore(
     });
   }
 
+  // Normalize weights across active sources only
   const totalActiveWeight = activeSourceWeights.reduce((sum, s) => sum + s.weight, 0);
   const weightNormalizer = totalActiveWeight > 0 ? 1 / totalActiveWeight : 1;
 
@@ -198,8 +194,20 @@ export function computeSurgeScore(
     : relevantSignals.length >= 10 ? 1
     : 0;
 
+  // Confidence cap: thin single-source data should never score high.
+  // A company with 1 signal from 1 source is weak evidence — cap at 30.
+  // Require at least 3 signals across 2+ sources to score above 40.
+  let confidenceCap = SURGE_MAX;
+  if (relevantSignals.length === 1) {
+    confidenceCap = 30;
+  } else if (relevantSignals.length === 2 && activeSources === 1) {
+    confidenceCap = 35;
+  } else if (relevantSignals.length <= 3 && activeSources === 1) {
+    confidenceCap = 40;
+  }
+
   const finalScore = Math.min(
-    SURGE_MAX,
+    confidenceCap,
     Math.round(compositeScore + diversityBonus + totalSignalBonus)
   );
 
@@ -214,7 +222,7 @@ export function computeSurgeScore(
     is_surging: finalScore >= SURGE_THRESHOLD,
     data_freshness: freshnessSecs < 7200 ? "fresh" : "stale",
     freshness_secs: freshnessSecs,
-    signal_breakdown: breakdown.filter((b) => b.signal_count > 0),
+    signal_breakdown: breakdown,
     total_signals: relevantSignals.length,
     scored_at: now,
   };

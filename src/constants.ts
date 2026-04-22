@@ -163,3 +163,24 @@ export const SEED_COMPANIES = [
 ] as const;
 
 export type SeedCompany = (typeof SEED_COMPANIES)[number];
+
+export const FORTUNE500_BLOCKLIST = new Set([
+  "capitalone.com", "generalmotors.com", "cvshealth.com", "blackveatch.com",
+  "deloitte.com", "ey.com", "pwc.com", "kpmg.com", "mckinsey.com", "bcg.com",
+  "accenture.com", "ibm.com", "oracle.com", "sap.com", "cisco.com",
+  "intel.com", "hp.com", "dell.com", "walmart.com", "target.com",
+  "homedepot.com", "lowes.com", "costco.com", "kroger.com", "walgreens.com",
+  "unitedhealth.com", "anthem.com", "cigna.com", "aetna.com", "humana.com",
+  "jpmorgan.com", "bankofamerica.com", "wellsfargo.com", "citigroup.com",
+  "goldmansachs.com", "morganstanley.com", "blackrock.com", "fidelity.com",
+  "verizon.com", "att.com", "tmobile.com", "comcast.com", "charter.com",
+  "exxon.com", "chevron.com", "bp.com", "shell.com", "conocophillips.com",
+  "boeing.com", "lockheedmartin.com", "raytheon.com", "generaldynamics.com",
+  "ford.com", "gm.com", "stellantis.com", "toyota.com", "honda.com",
+  "johnson.com", "pfizer.com", "abbvie.com", "merck.com", "bristolmyers.com",
+  "ups.com", "fedex.com", "dhl.com", "usps.com",
+  "mcdonalds.com", "starbucks.com", "yum.com", "restaurant.com",
+  "disney.com", "comcastnbcuniversal.com", "warnerbrosdiscovery.com",
+  "newscorp.com", "foxcorp.com", "nytimes.com", "wsj.com",
+  "ge.com", "3m.com", "honeywell.com", "caterpillar.com", "deere.com",
+]);

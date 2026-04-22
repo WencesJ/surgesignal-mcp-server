@@ -4,6 +4,16 @@ import { getAllSignals, getLastIngestTime } from "../services/signal-store.js";
 import { FORTUNE500_BLOCKLIST } from "../constants.js";
 import type { ScanTopicInput, SurgeScore } from "../schemas/surge.js";
 
+const NON_SAAS_TLDS = new Set([".edu", ".gov", ".mil", ".ac"]);
+const NON_SAAS_KEYWORDS = ["university", "college", "hospital", "health", "medical", "bank", "insurance", "financial", "church", "school"];
+
+function isSaaSDomain(domain: string): boolean {
+  if (FORTUNE500_BLOCKLIST.has(domain)) return false;
+  if (NON_SAAS_TLDS.has("." + domain.split(".").pop())) return false;
+  if (NON_SAAS_KEYWORDS.some((kw) => domain.includes(kw))) return false;
+  return true;
+}
+
 export async function handleScanTopic(params: Partial<ScanTopicInput>) {
   const topic = params.topic || "crm";
   const minScore = params.min_score ?? 0;
@@ -12,7 +22,7 @@ export async function handleScanTopic(params: Partial<ScanTopicInput>) {
 
   const allSignals = await getAllSignals();
   const topicSignals = allSignals.filter(
-    (s) => s.topic === topic && !FORTUNE500_BLOCKLIST.has(s.domain)
+    (s) => s.topic === topic && isSaaSDomain(s.domain)
   );
   const cachedAt = getLastIngestTime();
 
@@ -35,7 +45,7 @@ export async function handleScanTopic(params: Partial<ScanTopicInput>) {
       cachedAt,
     );
 
-    if (score.surge_score >= minScore) {
+    if (score.surge_score >= minScore && score.total_signals > 0) {
       scored.push(score);
     }
   }

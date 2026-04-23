@@ -222,7 +222,7 @@ export function computeSurgeScore(
     is_surging: finalScore >= SURGE_THRESHOLD,
     data_freshness: freshnessSecs < 7200 ? "fresh" : "stale",
     freshness_secs: freshnessSecs,
-    signal_breakdown: breakdown,
+    signal_breakdown: breakdown.filter((b) => b.signal_count > 0),
     total_signals: relevantSignals.length,
     scored_at: now,
   };

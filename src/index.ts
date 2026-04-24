@@ -290,12 +290,12 @@ function startKeepAlive() {
   }, 10 * 60 * 1000);
 }
 
-const INGESTION_TIMEOUT_MS = 6 * 60 * 1000;
+const INGESTION_TIMEOUT_MS = 20 * 60 * 1000;
 
 const port = parseInt(process.env.PORT || "3000");
 app.listen(port, () => {
   console.error(`SurgeSignal MCP server running on http://localhost:${port}`);
-  console.error("Running initial data ingestion (4 min timeout)...");
+  console.error("Running initial data ingestion (20 min timeout)...");
 
   const ingestionPromise = runFullIngestion()
     .then((result) => {
@@ -307,7 +307,7 @@ app.listen(port, () => {
 
   const timeoutPromise = new Promise<void>((resolve) => {
     setTimeout(() => {
-      console.error("Ingestion timeout reached (4 min) — server ready with partial data");
+      console.error("Ingestion timeout reached (20 min) — server ready with partial data");
       resolve();
     }, INGESTION_TIMEOUT_MS);
   });

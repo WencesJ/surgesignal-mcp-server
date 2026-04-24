@@ -3,13 +3,13 @@ import type { SignalSource } from "../constants.js";
 import type { CoveredTopic } from "../constants.js";
 import { REDIS_SIGNAL_PREFIX, CACHE_TTL_SIGNAL, COVERED_TOPICS } from "../constants.js";
 import { getRedis, isRedisAvailable } from "./redis.js";
-import { getOrCreateCompany, deriveCompanyName } from "./company-resolver.js";
+import { getOrCreateCompany } from "./company-resolver.js";
 import { ingestRedditRSS, searchRedditForCompany } from "./ingestors/reddit-rss.js";
 import { ingestGitHub, searchGitHubForCompany } from "./ingestors/github.js";
-import { ingestNewsData, searchNewsForCompany } from "./ingestors/newsdata.js";
 import { ingestAdzuna, searchJobsForCompany } from "./ingestors/adzuna.js";
 import { ingestLinkedInDirect as ingestLinkedIn, searchLinkedInForCompany } from "./ingestors/linkedin.js";
 import { ingestHackerNews, searchHNForCompany } from "./ingestors/hackernews.js";
+import { ingestG2BrightData } from "./ingestors/g2.js";
 
 let memorySignals: RawSignal[] = [];
 let lastIngestAt: number = 0;
@@ -71,7 +71,7 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
   console.error(`[fan-out] Cache miss for ${domain}:${topic}, running dynamic lookup for "${companyName}"...`);
 
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Fan-out timeout after 20s")), 40000)
+    setTimeout(() => reject(new Error("Fan-out timeout after 40s")), 40000)
   );
 
   try {
@@ -81,7 +81,6 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
       const sources: { name: string; fn: () => Promise<RawSignal[]> }[] = [
         { name: "reddit", fn: () => searchRedditForCompany(companyName, domain, topics) },
         { name: "hackernews", fn: () => searchHNForCompany(companyName, domain, topics) },
-        { name: "news", fn: () => searchNewsForCompany(companyName, domain, topics) },
         { name: "jobs", fn: () => searchJobsForCompany(companyName, domain, topics) },
         { name: "github", fn: () => searchGitHubForCompany(companyName, domain, topics) },
         { name: "linkedin", fn: () => searchLinkedInForCompany(companyName, domain, topics) },
@@ -174,10 +173,10 @@ async function runSequentialIngestors(): Promise<{ allSignals: RawSignal[]; bySo
   const ingestors: { name: string; fn: () => Promise<RawSignal[]> }[] = [
     { name: "reddit", fn: ingestRedditRSS },
     { name: "github", fn: ingestGitHub },
-    { name: "news", fn: ingestNewsData },
     { name: "jobs", fn: ingestAdzuna },
     { name: "linkedin", fn: ingestLinkedIn },
     { name: "hackernews", fn: ingestHackerNews },
+    { name: "g2", fn: ingestG2BrightData },
   ];
 
   const allSignals: RawSignal[] = [];
@@ -252,10 +251,10 @@ async function runCronCycle(): Promise<void> {
   const sources: { name: string; fn: () => Promise<RawSignal[]> }[] = [
     { name: "reddit", fn: ingestRedditRSS },
     { name: "github", fn: ingestGitHub },
-    { name: "news", fn: ingestNewsData },
     { name: "jobs", fn: ingestAdzuna },
     { name: "linkedin", fn: ingestLinkedIn },
     { name: "hackernews", fn: ingestHackerNews },
+    { name: "g2", fn: ingestG2BrightData },
   ];
 
   for (const { name, fn } of sources) {

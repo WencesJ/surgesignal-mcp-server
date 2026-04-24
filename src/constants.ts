@@ -11,8 +11,8 @@ export const SIGNAL_SOURCES = [
   "linkedin",
   "hackernews",
   "jobs",
-  "news",
   "github",
+  "g2",
 ] as const;
 
 export type SignalSource = (typeof SIGNAL_SOURCES)[number];
@@ -20,10 +20,10 @@ export type SignalSource = (typeof SIGNAL_SOURCES)[number];
 export const SOURCE_WEIGHTS: Record<SignalSource, number> = {
   reddit: 0.20,
   linkedin: 0.15,
-  hackernews: 0.20,
+  hackernews: 0.10,
   jobs: 0.20,
-  news: 0.10,
   github: 0.15,
+  g2: 0.20,
 };
 
 export const RECENCY_DECAY_HOURS = 168;

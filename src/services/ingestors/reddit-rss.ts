@@ -112,6 +112,7 @@ interface RedditPost {
   url: string;
   permalink: string;
   created_utc: number;
+  author: string;
 }
 
 async function fetchRedditJSON(url: string): Promise<RedditPost[]> {

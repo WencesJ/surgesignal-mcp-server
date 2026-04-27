@@ -40,6 +40,33 @@ const GENERIC_SEARCHES: Record<string, CoveredTopic[]> = {
   "workflow automation": ["workflow-automation", "integration-platform"],
 };
 
+// Strong intent signals — high score boost
+const STRONG_INTENT_SIGNALS = [
+  "switching to", "switched to", "migrating from", "migrated from",
+  "replacing", "replaced", "alternative to", "alternatives to",
+  "vs ", " versus ", "compared to", "comparison",
+  "evaluating", "evaluation", "considering", "shortlisted",
+  "looking for", "recommend", "anyone using", "experience with",
+  "why we chose", "why we switched", "why we moved",
+  "moved from", "moving from", "moved to",
+  "ask hn", "who uses", "which tool", "what do you use",
+  "pricing", "cost of", "roi", "worth it",
+];
+
+// Weak intent signals — lower score boost
+const WEAK_INTENT_SIGNALS = [
+  "implemented", "implementing", "deploying", "deployment",
+  "integrating", "integration", "built with", "using",
+  "launched", "released", "show hn",
+];
+
+// Hard exclusions — corporate news, not buying signals
+const EXCLUDED_SIGNALS = [
+  "raises", "funding", "valuation", "ipo", "acquisition",
+  "sanctions", "lawsuit", "layoffs", "breach", "outage",
+  "ceo appointed", "joins as ceo", "executive",
+];
+
 const DOMAIN_PATTERN = /\b([a-z0-9-]+\.(com|io|co|ai|dev|app|so|org|net))\b/gi;
 
 const BLOCKED_DOMAINS = new Set([
@@ -67,29 +94,33 @@ function extractDomains(text: string): string[] {
 function scoreRelevance(title: string, points: number, comments: number): number {
   const lower = title.toLowerCase();
 
-  const strongSignals = [
-    "switching to", "migrating from", "replacing", "alternative to",
-    "vs ", "compared to", "evaluation", "looking for", "recommend",
-    "anyone using", "experience with", "review of", "moved from",
-    "pricing", "cost of", "implemented", "why we chose",
-  ];
+  // Hard exclude corporate news — not buying signals
+  const isExcluded = EXCLUDED_SIGNALS.some((s) => lower.includes(s));
+  if (isExcluded) return 0;
 
-  const weakSignals = [
-    "show hn", "launch", "released", "announced", "new feature",
-  ];
+  let score = 0.2;
+  let hasAnySignal = false;
 
-  let score = 0.3;
-
-  for (const signal of strongSignals) {
-    if (lower.includes(signal)) score += 0.15;
+  for (const signal of STRONG_INTENT_SIGNALS) {
+    if (lower.includes(signal)) {
+      score += 0.12;
+      hasAnySignal = true;
+    }
   }
 
-  for (const signal of weakSignals) {
-    if (lower.includes(signal)) score += 0.05;
+  for (const signal of WEAK_INTENT_SIGNALS) {
+    if (lower.includes(signal)) {
+      score += 0.05;
+      hasAnySignal = true;
+    }
   }
 
-  if (points > 100) score += 0.1;
-  if (comments > 50) score += 0.1;
+  // Community engagement boosts credibility
+  if (points > 50) { score += 0.1; hasAnySignal = true; }
+  if (comments > 20) { score += 0.1; hasAnySignal = true; }
+
+  // Require at least one signal or meaningful engagement
+  if (!hasAnySignal && points < 10) return 0;
 
   return Math.min(1, score);
 }
@@ -147,6 +178,7 @@ async function ingestTargetedCompanies(): Promise<RawSignal[]> {
 
       for (const hit of hits) {
         const relevance = scoreRelevance(hit.title, hit.points, hit.num_comments);
+        if (relevance === 0) continue;
 
         for (const topic of config.topics) {
           signals.push({
@@ -157,6 +189,7 @@ async function ingestTargetedCompanies(): Promise<RawSignal[]> {
             timestamp: hit.created_at || new Date().toISOString(),
             evidence_url: `https://news.ycombinator.com/item?id=${hit.objectID}`,
             evidence_snippet: `${hit.title} (${hit.points} points, ${hit.num_comments} comments)`,
+            person_hint: hit.author ? `hn: ${hit.author}` : undefined,
           });
         }
       }
@@ -182,9 +215,11 @@ async function ingestGenericSearches(): Promise<RawSignal[]> {
       const hits = await searchHN(query, 10);
 
       for (const hit of hits) {
+        const relevance = scoreRelevance(hit.title, hit.points, hit.num_comments);
+        if (relevance === 0) continue;
+
         const text = `${hit.title} ${hit.url || ""}`;
         const domains = extractDomains(text);
-        const relevance = scoreRelevance(hit.title, hit.points, hit.num_comments);
 
         for (const domain of domains) {
           const company = getOrCreateCompany(domain);
@@ -198,6 +233,7 @@ async function ingestGenericSearches(): Promise<RawSignal[]> {
               timestamp: hit.created_at || new Date().toISOString(),
               evidence_url: `https://news.ycombinator.com/item?id=${hit.objectID}`,
               evidence_snippet: `${hit.title} (${hit.points} points, ${hit.num_comments} comments)`,
+              person_hint: hit.author ? `hn: ${hit.author}` : undefined,
             });
           }
         }
@@ -221,6 +257,7 @@ export async function searchHNForCompany(companyName: string, domain: string, to
 
     for (const hit of hits) {
       const relevance = scoreRelevance(hit.title, hit.points, hit.num_comments);
+      if (relevance === 0) continue;
 
       for (const topic of topics) {
         signals.push({
@@ -231,6 +268,7 @@ export async function searchHNForCompany(companyName: string, domain: string, to
           timestamp: hit.created_at || new Date().toISOString(),
           evidence_url: `https://news.ycombinator.com/item?id=${hit.objectID}`,
           evidence_snippet: `${hit.title} (${hit.points} points, ${hit.num_comments} comments)`,
+          person_hint: hit.author ? `hn: ${hit.author}` : undefined,
         });
       }
     }

@@ -25,6 +25,9 @@ const REPO_TOPIC_MAP: Record<string, CoveredTopic[]> = {
   "umami-software/umami": ["product-analytics"],
   "keycloak/keycloak": ["identity-verification", "security-operations"],
   "gravitl/netmaker": ["cloud-infrastructure", "endpoint-security"],
+  "forcedotcom/salesforcedx-vscode": ["crm", "sales-engagement"],
+  "salesforce/lwc": ["crm", "sales-engagement"],
+  "HubSpot/hubspot-api-nodejs-client": ["crm", "marketing-automation"],
 };
 
 interface GitHubIssue {

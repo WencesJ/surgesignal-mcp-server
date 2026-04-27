@@ -8,18 +8,101 @@ const BASE_URL = "https://api.adzuna.com/v1/api/jobs/us/search/1";
 
 const KEYWORD_TOPIC_MAP: Record<string, CoveredTopic[]> = {
   "CRM engineer": ["crm", "sales-engagement"],
+  "Salesforce developer": ["crm", "sales-engagement"],
+  "Salesforce administrator": ["crm", "sales-engagement"],
+  "HubSpot": ["crm", "marketing-automation"],
   "marketing automation": ["marketing-automation", "abm"],
-  "data engineer": ["data-integration", "etl", "data-warehouse"],
+  "data engineer Snowflake": ["data-warehouse", "data-integration"],
+  "data engineer Databricks": ["data-warehouse", "etl"],
+  "data engineer BigQuery": ["data-warehouse", "data-integration"],
+  "dbt developer": ["etl", "data-integration", "data-warehouse"],
   "business intelligence analyst": ["business-intelligence", "product-analytics"],
+  "Tableau developer": ["business-intelligence", "product-analytics"],
+  "Looker developer": ["business-intelligence", "product-analytics"],
   "customer success manager": ["customer-success", "help-desk"],
+  "Zendesk administrator": ["help-desk", "customer-success"],
   "DevOps engineer": ["ci-cd", "container-orchestration", "monitoring"],
+  "Datadog engineer": ["monitoring", "cloud-infrastructure"],
   "cloud infrastructure engineer": ["cloud-infrastructure", "container-orchestration"],
   "security engineer": ["security-operations", "endpoint-security", "siem"],
+  "Stripe integration": ["payment-processing", "ecommerce-platform"],
   "payment systems engineer": ["payment-processing", "ecommerce-platform"],
   "workflow automation": ["workflow-automation", "rpa", "integration-platform"],
+  "Zapier automation": ["workflow-automation", "integration-platform"],
   "product analytics engineer": ["product-analytics", "ab-testing", "feature-flags"],
+  "Mixpanel analyst": ["product-analytics", "ab-testing"],
+  "Amplitude analyst": ["product-analytics", "ab-testing"],
   "HR technology": ["hr-software", "ats", "employee-engagement"],
+  "Workday consultant": ["hr-software", "payroll"],
+  "Rippling administrator": ["hr-software", "payroll"],
 };
+
+// Map tool/vendor mentions in job descriptions to canonical domains
+const TOOL_DOMAIN_MAP: Record<string, string> = {
+  "salesforce": "salesforce.com",
+  "hubspot": "hubspot.com",
+  "stripe": "stripe.com",
+  "datadog": "datadog.com",
+  "snowflake": "snowflake.com",
+  "zendesk": "zendesk.com",
+  "intercom": "intercom.com",
+  "slack": "slack.com",
+  "notion": "notion.so",
+  "asana": "asana.com",
+  "monday.com": "monday.com",
+  "linear": "linear.app",
+  "mixpanel": "mixpanel.com",
+  "amplitude": "amplitude.com",
+  "segment": "segment.com",
+  "twilio": "twilio.com",
+  "sendgrid": "sendgrid.com",
+  "cloudflare": "cloudflare.com",
+  "vercel": "vercel.com",
+  "mongodb": "mongodb.com",
+  "databricks": "databricks.com",
+  "bigquery": "cloud.google.com",
+  "looker": "looker.com",
+  "tableau": "tableau.com",
+  "dbt": "getdbt.com",
+  "fivetran": "fivetran.com",
+  "grafana": "grafana.com",
+  "pagerduty": "pagerduty.com",
+  "new relic": "newrelic.com",
+  "newrelic": "newrelic.com",
+  "okta": "okta.com",
+  "crowdstrike": "crowdstrike.com",
+  "splunk": "splunk.com",
+  "zapier": "zapier.com",
+  "workato": "workato.com",
+  "rippling": "rippling.com",
+  "gusto": "gusto.com",
+  "bamboohr": "bamboohr.com",
+  "workday": "workday.com",
+  "shopify": "shopify.com",
+  "pipedrive": "pipedrive.com",
+  "freshdesk": "freshdesk.com",
+  "zoom": "zoom.us",
+  "ringcentral": "ringcentral.com",
+  "clickup": "clickup.com",
+  "jira": "atlassian.com",
+  "confluence": "atlassian.com",
+  "posthog": "posthog.com",
+  "hotjar": "hotjar.com",
+  "fullstory": "fullstory.com",
+};
+
+function extractToolDomains(text: string): string[] {
+  const lower = text.toLowerCase();
+  const domains = new Set<string>();
+
+  for (const [tool, domain] of Object.entries(TOOL_DOMAIN_MAP)) {
+    if (lower.includes(tool)) {
+      domains.add(domain);
+    }
+  }
+
+  return Array.from(domains);
+}
 
 const DOMAIN_PATTERN = /\b([a-z0-9-]+\.(com|io|co|ai|dev|app|so|org|net))\b/gi;
 
@@ -174,26 +257,27 @@ export async function ingestAdzuna(): Promise<RawSignal[]> {
           ? new Date(job.created).toISOString()
           : new Date().toISOString();
 
-        const domains = extractDomains(description);
-        let company;
+        // First try to extract tool domains from job description
+        const toolDomains = extractToolDomains(`${title} ${description}`);
 
-        if (domains.length > 0) {
-          company = getOrCreateCompany(domains[0]);
-        } else {
-          const slug = companyName.toLowerCase().replace(/[^a-z0-9]/g, "");
-          company = getOrCreateCompany(`${slug}.com`, companyName);
-        }
-
-        for (const topic of topics) {
-          signals.push({
-            source: "jobs",
-            domain: company.canonical_domain,
-            topic,
-            score: relevance,
-            timestamp,
-            evidence_url: job.redirect_url,
-            evidence_snippet: `${companyName} hiring: ${title}`.slice(0, 500),
-          });
+        // Only create signals for known tool domains.
+        // Do NOT fall back to the hiring company domain — that creates noise
+        // (metropolis.com appearing in data-warehouse results because they're hiring).
+        if (toolDomains.length > 0) {
+          for (const domain of toolDomains) {
+            const company = getOrCreateCompany(domain);
+            for (const topic of topics) {
+              signals.push({
+                source: "jobs",
+                domain: company.canonical_domain,
+                topic,
+                score: relevance,
+                timestamp,
+                evidence_url: job.redirect_url,
+                evidence_snippet: `${companyName} hiring: ${title}`.slice(0, 500),
+              });
+            }
+          }
         }
       }
     } catch (err) {

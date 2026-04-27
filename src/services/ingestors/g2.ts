@@ -120,24 +120,43 @@ interface BrightDataG2Review {
   url: string;
 }
 
+const EVALUATION_SIGNALS = [
+  "switching from", "switched from", "migrated from", "migration from",
+  "replaced", "replacing", "moving from", "moved from",
+  "alternative to", "alternatives to", "vs ", " versus ",
+  "evaluated", "evaluating", "evaluation", "compared to", "comparison",
+  "chose", "selected", "decided to use", "went with", "picked",
+  "considering", "shortlisted", "piloted", "proof of concept", "poc",
+  "why we chose", "why we switched", "why we moved",
+  "looking for", "searching for", "needed a solution",
+];
+
+const USAGE_SIGNALS = [
+  "use case", "workflow", "integrates with", "integration with",
+  "roi", "saves time", "time saving", "cost saving", "reduced",
+  "implemented", "deployment", "onboarding", "rollout",
+  "would recommend", "worth the price", "pricing", "cost",
+];
+
 function scoreReview(stars: number, title: string, text: string): number {
   const lower = `${title} ${text}`.toLowerCase();
 
-  const strongSignals = [
-    "switching from", "migrated from", "replaced", "alternative",
-    "compared to", "evaluated", "chose", "selected", "implemented",
-    "integrates with", "use case", "workflow", "roi", "saves time",
-    "would recommend", "worth the price",
-  ];
+  const hasEvaluationSignal = EVALUATION_SIGNALS.some((s) => lower.includes(s));
+  const hasUsageSignal = USAGE_SIGNALS.some((s) => lower.includes(s));
 
-  let score = 0.3;
+  if (!hasEvaluationSignal && !hasUsageSignal) return 0;
 
-  if (stars >= 4) score += 0.1;
-  if (stars === 5) score += 0.1;
+  let score = 0.2;
 
-  for (const signal of strongSignals) {
-    if (lower.includes(signal)) score += 0.1;
+  for (const signal of EVALUATION_SIGNALS) {
+    if (lower.includes(signal)) score += 0.15;
   }
+
+  for (const signal of USAGE_SIGNALS) {
+    if (lower.includes(signal)) score += 0.05;
+  }
+
+  if (stars <= 3) score += 0.05;
 
   return Math.min(1, score);
 }
@@ -221,6 +240,8 @@ export async function ingestG2BrightData(): Promise<RawSignal[]> {
       if (!fullText || fullText.length < 20) continue;
 
       const relevance = scoreReview(review.stars || 3, review.title || "", fullText);
+      if (relevance === 0) continue;
+
       const timestamp = review.date
         ? new Date(review.date).toISOString()
         : new Date().toISOString();

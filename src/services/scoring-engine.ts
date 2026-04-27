@@ -19,6 +19,23 @@ const NOISE_PATTERNS = [
   /by clicking continue/i,
   /accept.*cookies/i,
   /passkey/i,
+  /looking for a silvestratus/i,
+  /navigator of the sea/i,
+  /working class keep the government/i,
+  /r\u00f6stet mein depot/i,
+  /kako u/i,
+  /buy verified/i,
+  /verified accounts/i,
+  /aged accounts/i,
+  /click on the link to sign in/i,
+  /check your spam folder/i,
+  /if you don't see the email in your inbox/i,
+  /join now to see who you already know/i,
+  /be seen by recruiters/i,
+  /sign in to linkedin/i,
+  /join linkedin/i,
+  /create your free account/i,
+  /linkedin corporation/i,
 ];
 
 function isNoiseSignal(signal: RawSignal): boolean {
@@ -26,11 +43,21 @@ function isNoiseSignal(signal: RawSignal): boolean {
   return NOISE_PATTERNS.some((p) => p.test(text));
 }
 
+export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
+  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
+}
+
 function isTopicRelevant(signal: RawSignal, topic: string): boolean {
   const snippet = (signal.evidence_snippet || "").toLowerCase();
-  const url = (signal.evidence_url || "").toLowerCase();
 
-  // Reddit: must be from a whitelisted B2B subreddit
+  // G2, LinkedIn, and Jobs signals are explicitly tagged with domain and topic
+  // at ingestion time by structured ingestors — trust their classification.
+  // Only Reddit and HackerNews need keyword verification since they scrape
+  // broad feeds and tag signals opportunistically.
+  if (signal.source === "g2" || signal.source === "linkedin" || signal.source === "jobs" || signal.source === "github") {
+    return true;
+  }
+
   if (signal.source === "reddit") {
     const subredditMatch = (signal.evidence_url || "").match(/reddit\.com\/r\/([^/]+)/i);
     if (subredditMatch) {
@@ -41,16 +68,8 @@ function isTopicRelevant(signal: RawSignal, topic: string): boolean {
     }
   }
 
-  // Topic keywords must appear in the evidence snippet or URL.
-  // NOTE: We intentionally do NOT fall back to domain name matching here.
-  // The domain name (e.g. "stripe") appears in almost every signal for that company,
-  // which would cause all topics for the same domain to return identical results.
   const keywords = TOPIC_KEYWORDS[topic as CoveredTopic] ?? [];
-  return keywords.some((kw) => snippet.includes(kw.toLowerCase()) || url.includes(kw.toLowerCase()));
-}
-
-export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
-  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
+  return keywords.some((kw) => snippet.includes(kw.toLowerCase()));
 }
 
 function recencyWeight(signalTimestamp: string): number {
@@ -72,7 +91,10 @@ function aggregateSourceSignals(signals: RawSignal[]): {
     return { rawScore: 0, signalCount: 0, freshestSignal: undefined, topEvidence: undefined };
   }
 
-  const sorted = [...signals].sort(
+  const cleanSignals = signals.filter((s) => !isNoiseSignal(s));
+  const scoringSignals = cleanSignals.length > 0 ? cleanSignals : signals;
+
+  const sorted = [...scoringSignals].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
 
@@ -81,7 +103,8 @@ function aggregateSourceSignals(signals: RawSignal[]): {
 
   for (const signal of sorted) {
     const rw = recencyWeight(signal.timestamp);
-    weightedSum += signal.score * rw;
+    const signalScore = isNoiseSignal(signal) ? signal.score * 0.1 : signal.score;
+    weightedSum += signalScore * rw;
     weightTotal += rw;
   }
 
@@ -111,7 +134,6 @@ export function computeSurgeScore(
 ): SurgeScore {
   const now = new Date().toISOString();
 
-  // Filter to only topic-relevant, non-noise signals
   const relevantSignals = allSignals.filter(
     (s) => !isNoiseSignal(s) && isTopicRelevant(s, topic)
   );
@@ -161,7 +183,6 @@ export function computeSurgeScore(
     });
   }
 
-  // Normalize weights across active sources only
   const totalActiveWeight = activeSourceWeights.reduce((sum, s) => sum + s.weight, 0);
   const weightNormalizer = totalActiveWeight > 0 ? 1 / totalActiveWeight : 1;
 
@@ -194,20 +215,8 @@ export function computeSurgeScore(
     : relevantSignals.length >= 10 ? 1
     : 0;
 
-  // Confidence cap: thin single-source data should never score high.
-  // A company with 1 signal from 1 source is weak evidence — cap at 30.
-  // Require at least 3 signals across 2+ sources to score above 40.
-  let confidenceCap = SURGE_MAX;
-  if (relevantSignals.length === 1) {
-    confidenceCap = 30;
-  } else if (relevantSignals.length === 2 && activeSources === 1) {
-    confidenceCap = 35;
-  } else if (relevantSignals.length <= 3 && activeSources === 1) {
-    confidenceCap = 40;
-  }
-
   const finalScore = Math.min(
-    confidenceCap,
+    SURGE_MAX,
     Math.round(compositeScore + diversityBonus + totalSignalBonus)
   );
 

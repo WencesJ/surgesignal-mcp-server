@@ -7,7 +7,6 @@ import { getOrCreateCompany } from "./company-resolver.js";
 import { ingestRedditRSS, searchRedditForCompany } from "./ingestors/reddit-rss.js";
 import { ingestGitHub, searchGitHubForCompany } from "./ingestors/github.js";
 import { ingestAdzuna, searchJobsForCompany } from "./ingestors/adzuna.js";
-import { ingestLinkedInDirect as ingestLinkedIn, searchLinkedInForCompany } from "./ingestors/linkedin.js";
 import { ingestHackerNews, searchHNForCompany } from "./ingestors/hackernews.js";
 import { ingestG2BrightData } from "./ingestors/g2.js";
 
@@ -83,7 +82,6 @@ async function fanOutForDomain(domain: string, topic: string): Promise<RawSignal
         { name: "hackernews", fn: () => searchHNForCompany(companyName, domain, topics) },
         { name: "jobs", fn: () => searchJobsForCompany(companyName, domain, topics) },
         { name: "github", fn: () => searchGitHubForCompany(companyName, domain, topics) },
-        { name: "linkedin", fn: () => searchLinkedInForCompany(companyName, domain, topics) },
       ];
 
       for (const { name, fn } of sources) {
@@ -174,7 +172,6 @@ async function runSequentialIngestors(): Promise<{ allSignals: RawSignal[]; bySo
     { name: "reddit", fn: ingestRedditRSS },
     { name: "github", fn: ingestGitHub },
     { name: "jobs", fn: ingestAdzuna },
-    { name: "linkedin", fn: ingestLinkedIn },
     { name: "hackernews", fn: ingestHackerNews },
     { name: "g2", fn: ingestG2BrightData },
   ];
@@ -252,7 +249,6 @@ async function runCronCycle(): Promise<void> {
     { name: "reddit", fn: ingestRedditRSS },
     { name: "github", fn: ingestGitHub },
     { name: "jobs", fn: ingestAdzuna },
-    { name: "linkedin", fn: ingestLinkedIn },
     { name: "hackernews", fn: ingestHackerNews },
     { name: "g2", fn: ingestG2BrightData },
   ];
@@ -275,13 +271,13 @@ async function runCronCycle(): Promise<void> {
 }
 
 export function startCronSchedule(): void {
-  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
 
   setInterval(() => {
     runCronCycle().catch((err) =>
       console.error("[cron] Cycle error:", (err as Error).message)
     );
-  }, TWO_HOURS);
+  }, FOUR_HOURS);
 
-  console.error("Cron schedule started: full sequential refresh every 2h");
+  console.error("Cron schedule started: full sequential refresh every 4h");
 }

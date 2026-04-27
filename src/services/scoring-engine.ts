@@ -54,7 +54,7 @@ function isTopicRelevant(signal: RawSignal, topic: string): boolean {
   // at ingestion time by structured ingestors — trust their classification.
   // Only Reddit and HackerNews need keyword verification since they scrape
   // broad feeds and tag signals opportunistically.
-  if (signal.source === "g2" || signal.source === "linkedin" || signal.source === "jobs" || signal.source === "github") {
+  if (signal.source === "g2" || signal.source === "jobs" || signal.source === "github") {
     return true;
   }
 

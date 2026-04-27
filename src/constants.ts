@@ -8,7 +8,6 @@ export const SURGE_MIN = 0;
 
 export const SIGNAL_SOURCES = [
   "reddit",
-  "linkedin",
   "hackernews",
   "jobs",
   "github",
@@ -19,11 +18,10 @@ export type SignalSource = (typeof SIGNAL_SOURCES)[number];
 
 export const SOURCE_WEIGHTS: Record<SignalSource, number> = {
   reddit: 0.20,
-  linkedin: 0.15,
-  hackernews: 0.10,
+  hackernews: 0.15,
   jobs: 0.20,
-  github: 0.15,
-  g2: 0.20,
+  github: 0.20,
+  g2: 0.25,
 };
 
 export const RECENCY_DECAY_HOURS = 168;

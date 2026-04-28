@@ -19,11 +19,6 @@ const NOISE_PATTERNS = [
   /by clicking continue/i,
   /accept.*cookies/i,
   /passkey/i,
-  /looking for a silvestratus/i,
-  /navigator of the sea/i,
-  /working class keep the government/i,
-  /r\u00f6stet mein depot/i,
-  /kako u/i,
   /buy verified/i,
   /verified accounts/i,
   /aged accounts/i,
@@ -43,18 +38,11 @@ function isNoiseSignal(signal: RawSignal): boolean {
   return NOISE_PATTERNS.some((p) => p.test(text));
 }
 
-export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
-  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
-}
-
 function isTopicRelevant(signal: RawSignal, topic: string): boolean {
   const snippet = (signal.evidence_snippet || "").toLowerCase();
+  const url = (signal.evidence_url || "").toLowerCase();
 
-  // G2, LinkedIn, and Jobs signals are explicitly tagged with domain and topic
-  // at ingestion time by structured ingestors — trust their classification.
-  // Only Reddit and HackerNews need keyword verification since they scrape
-  // broad feeds and tag signals opportunistically.
-  if (signal.source === "g2" || signal.source === "jobs" || signal.source === "github") {
+  if (signal.source === "g2" || signal.source === "github") {
     return true;
   }
 
@@ -68,8 +56,20 @@ function isTopicRelevant(signal: RawSignal, topic: string): boolean {
     }
   }
 
+  if (signal.source === "jobs") {
+    const keywords = TOPIC_KEYWORDS[topic as CoveredTopic] ?? [];
+    const domainRoot = signal.domain.replace(/\.[^.]+$/, "").toLowerCase();
+    const hasTopicKeyword = keywords.some((kw) => snippet.includes(kw.toLowerCase()));
+    const hasDomainMatch = domainRoot.length > 3 && snippet.includes(domainRoot);
+    return hasTopicKeyword && hasDomainMatch;
+  }
+
   const keywords = TOPIC_KEYWORDS[topic as CoveredTopic] ?? [];
-  return keywords.some((kw) => snippet.includes(kw.toLowerCase()));
+  return keywords.some((kw) => snippet.includes(kw.toLowerCase()) || url.includes(kw.toLowerCase()));
+}
+
+export function filterRelevantSignals(signals: RawSignal[], topic: string): RawSignal[] {
+  return signals.filter((s) => !isNoiseSignal(s) && isTopicRelevant(s, topic));
 }
 
 function recencyWeight(signalTimestamp: string): number {
@@ -91,10 +91,7 @@ function aggregateSourceSignals(signals: RawSignal[]): {
     return { rawScore: 0, signalCount: 0, freshestSignal: undefined, topEvidence: undefined };
   }
 
-  const cleanSignals = signals.filter((s) => !isNoiseSignal(s));
-  const scoringSignals = cleanSignals.length > 0 ? cleanSignals : signals;
-
-  const sorted = [...scoringSignals].sort(
+  const sorted = [...signals].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
 
@@ -103,8 +100,7 @@ function aggregateSourceSignals(signals: RawSignal[]): {
 
   for (const signal of sorted) {
     const rw = recencyWeight(signal.timestamp);
-    const signalScore = isNoiseSignal(signal) ? signal.score * 0.1 : signal.score;
-    weightedSum += signalScore * rw;
+    weightedSum += signal.score * rw;
     weightTotal += rw;
   }
 
@@ -215,8 +211,17 @@ export function computeSurgeScore(
     : relevantSignals.length >= 10 ? 1
     : 0;
 
+  let confidenceCap = SURGE_MAX;
+  if (relevantSignals.length === 1) {
+    confidenceCap = 30;
+  } else if (relevantSignals.length === 2 && activeSources === 1) {
+    confidenceCap = 35;
+  } else if (relevantSignals.length <= 3 && activeSources === 1) {
+    confidenceCap = 40;
+  }
+
   const finalScore = Math.min(
-    SURGE_MAX,
+    confidenceCap,
     Math.round(compositeScore + diversityBonus + totalSignalBonus)
   );
 

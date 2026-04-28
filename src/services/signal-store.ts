@@ -250,7 +250,6 @@ async function runCronCycle(): Promise<void> {
     { name: "github", fn: ingestGitHub },
     { name: "jobs", fn: ingestAdzuna },
     { name: "hackernews", fn: ingestHackerNews },
-    { name: "g2", fn: ingestG2BrightData },
   ];
 
   for (const { name, fn } of sources) {
@@ -272,12 +271,26 @@ async function runCronCycle(): Promise<void> {
 
 export function startCronSchedule(): void {
   const FOUR_HOURS = 4 * 60 * 60 * 1000;
+  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
+  // Fast sources — every 4 hours
   setInterval(() => {
     runCronCycle().catch((err) =>
       console.error("[cron] Cycle error:", (err as Error).message)
     );
   }, FOUR_HOURS);
 
-  console.error("Cron schedule started: full sequential refresh every 4h");
+  // G2 — once per day
+  setInterval(async () => {
+    console.error("[cron] G2 daily refresh starting...");
+    try {
+      const signals = await ingestG2BrightData();
+      await mergeSignals("g2", signals);
+      console.error(`[cron] G2: ${signals.length} signals`);
+    } catch (err) {
+      console.error("[cron] G2 failed:", (err as Error).message);
+    }
+  }, TWENTY_FOUR_HOURS);
+
+  console.error("Cron schedule started: Reddit/HN/Jobs/GitHub every 4h, G2 every 24h");
 }
